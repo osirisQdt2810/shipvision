@@ -110,16 +110,18 @@ namespace {
         auto scales = py::array_t<float>(static_cast<py::ssize_t>(images.size()));
         auto pads = py::array_t<float>(
             {static_cast<py::ssize_t>(images.size()), static_cast<py::ssize_t>(2)});
+        auto extents = py::array_t<int>(
+            {static_cast<py::ssize_t>(images.size()), static_cast<py::ssize_t>(2)});
         const auto params = make_params(mean, std, swap_rb);
         const auto plans = plan_frames(images, dst_h, dst_w, out_bytes, scales.mutable_data(),
-                                       pads.mutable_data());
+                                       pads.mutable_data(), extents.mutable_data());
         {
           py::gil_scoped_release release;
           run_letterbox(plans, reinterpret_cast<float*>(out_ptr), dst_h, dst_w, params,
                         static_cast<unsigned char>(pad_value),
                         reinterpret_cast<gpuStream_t>(stream_handle));
         }
-        return py::make_tuple(scales, pads);
+        return py::make_tuple(scales, pads, extents);
       }
 
       /// Preprocess and bring the result back to the host. Convenience and parity testing.
@@ -135,9 +137,11 @@ namespace {
         auto scales = py::array_t<float>(static_cast<py::ssize_t>(images.size()));
         auto pads = py::array_t<float>(
             {static_cast<py::ssize_t>(images.size()), static_cast<py::ssize_t>(2)});
+        auto extents = py::array_t<int>(
+            {static_cast<py::ssize_t>(images.size()), static_cast<py::ssize_t>(2)});
         const auto params = make_params(mean, std, swap_rb);
         const auto plans = plan_frames(images, dst_h, dst_w, bytes, scales.mutable_data(),
-                                       pads.mutable_data());
+                                       pads.mutable_data(), extents.mutable_data());
         auto* host_out = result.mutable_data();
         {
           py::gil_scoped_release release;
@@ -147,7 +151,7 @@ namespace {
                         static_cast<unsigned char>(pad_value), stream);
           download(device_out, host_out, bytes, stream);
         }
-        return py::make_tuple(result, scales, pads);
+        return py::make_tuple(result, scales, pads, extents);
       }
 
       // -- crops -----------------------------------------------------------------------
@@ -233,9 +237,17 @@ namespace {
       /// kernel: it keeps the kernel free of divergence, and the scales and pads have to
       /// reach numpy anyway so that post-processing can invert the letterbox with exactly
       /// the numbers that applied it.
+      ///
+      /// `extents_out` carries `out_h` and `out_w` back for the same reason the scales go
+      /// back, and it is not redundant with them: `out_h` is what the kernel divides by, so
+      /// it is the number that decides the sampling ratio, and Python re-derives it from the
+      /// scale rather than being told. Those two derivations can disagree by a pixel while
+      /// the scale and the pad both still match — `pad = (T - r) / 2` is the same for `r` and
+      /// `r + 1` whenever `T - r` is even — and then every row of the image is sampled from
+      /// the wrong ratio with the drift guard none the wiser.
       std::vector<FramePlan> plan_frames(const std::vector<U8Array>& images, int dst_h,
                                          int dst_w, size_t out_bytes, float* scales_out,
-                                         float* pads_out) const {
+                                         float* pads_out, int* extents_out) const {
         if (images.empty())
           throw std::invalid_argument("letterbox needs at least one image");
         const size_t required =
@@ -276,6 +288,8 @@ namespace {
           scales_out[i] = scale;
           pads_out[i * 2 + 0] = static_cast<float>(pad_x);
           pads_out[i * 2 + 1] = static_cast<float>(pad_y);
+          extents_out[i * 2 + 0] = out_h;
+          extents_out[i * 2 + 1] = out_w;
         }
         return plans;
       }
@@ -464,13 +478,14 @@ PYBIND11_MODULE(_C, m) {
       .def("letterbox_batch", &ImageOps::letterbox_batch, py::arg("images"), py::arg("dst_h"),
            py::arg("dst_w"), py::arg("mean"), py::arg("std"), py::arg("swap_rb"),
            py::arg("pad_value") = 114, py::arg("stream") = 0,
-           "Fused resize+pad+convert+normalise+NCHW, returned as numpy.")
+           "Fused resize+pad+convert+normalise+NCHW, returned as numpy. Yields "
+           "(tensor, scales, pads, resized_extents).")
       .def("letterbox_into", &ImageOps::letterbox_into, py::arg("images"), py::arg("out_ptr"),
            py::arg("out_bytes"), py::arg("dst_h"), py::arg("dst_w"), py::arg("mean"),
            py::arg("std"), py::arg("swap_rb"), py::arg("pad_value") = 114,
            py::arg("stream") = 0,
-           "Same, written straight into a caller-owned device buffer. The fast "
-           "path.")
+           "Same, written straight into a caller-owned device buffer. The fast path. "
+           "Yields (scales, pads, resized_extents).")
       .def("crop_batch", &ImageOps::crop_batch, py::arg("image"), py::arg("boxes"),
            py::arg("dst_h"), py::arg("dst_w"), py::arg("mean"), py::arg("std"),
            py::arg("swap_rb"), py::arg("stream") = 0,

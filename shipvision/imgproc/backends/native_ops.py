@@ -6,14 +6,19 @@ without touching the frame four times; crop as one launch over every box; NMS as
 bitmask with a sequential host sweep — and what is left in Python is argument marshalling
 plus one guard.
 
-The guard is the interesting part. The C++ side computes the letterbox scale and pads itself,
-in float32, and hands them back; this module computes the same numbers through
-:meth:`~shipvision.imgproc.base.LetterboxGeometry.plan` and refuses to continue if they
-disagree. Two implementations of a rounding rule will eventually drift — a ``lroundf``
-becomes a ``roundf``, a ``/ 2`` becomes a ``* 0.5f`` — and the symptom is boxes off by a
-pixel on the cameras whose resolution happens to land on a boundary, which is close to
-undebuggable after the fact. Checking costs two float comparisons per frame and turns that
+The guard is the interesting part. The C++ side computes the letterbox scale, the pads and the
+resized extent itself, in float32, and hands all three back; this module computes the same
+numbers through :meth:`~shipvision.imgproc.geometry.LetterboxGeometry.plan` and refuses to
+continue if they disagree. Two implementations of a rounding rule will eventually drift — a
+``lroundf`` becomes a ``roundf``, a ``/ 2`` becomes a ``* 0.5f`` — and the symptom is boxes off
+by a pixel on the cameras whose resolution happens to land on a boundary, which is close to
+undebuggable after the fact. Checking costs a handful of comparisons per frame and turns that
 into a loud failure on the first frame.
+
+The **resized extent** has to be one of the compared numbers, and it was the one missing. It is
+what the kernel divides by, so it decides the sampling ratio, and a one-pixel disagreement in
+it hides behind a scale and a pad that both still match — ``(T - r) // 2`` is the same for
+``r`` and ``r + 1`` whenever ``T - r`` is even. See :func:`_assert_geometry_agrees`.
 
 Importing this module never fails, even with no build and no device. Only construction does,
 with :class:`~shipvision.errors.BackendUnavailableError`, which is what lets
@@ -142,7 +147,7 @@ class NativeImageOps(ImageOps):
         target_h, target_w = validate_target_hw(target_hw)
         mean_array, std_array = resolve_normalisation(mean, std)
 
-        tensor, scales, pads = self._ops.letterbox_batch(
+        tensor, scales, pads, extents = self._ops.letterbox_batch(
             frames,
             target_h,
             target_w,
@@ -155,7 +160,7 @@ class NativeImageOps(ImageOps):
         geometries = [
             LetterboxGeometry.plan(frame.shape[:2], (target_h, target_w)) for frame in frames
         ]
-        _assert_geometry_agrees(geometries, scales, pads)
+        _assert_geometry_agrees(geometries, scales, pads, extents)
         return np.asarray(tensor, dtype=np.float32), geometries
 
     def crop_batch(
@@ -215,7 +220,7 @@ class NativeImageOps(ImageOps):
         mean_array, std_array = resolve_normalisation(mean, std)
         out.require(nchw_nbytes(len(frames), (target_h, target_w)), self._device_index)
 
-        scales, pads = self._ops.letterbox_into(
+        scales, pads, extents = self._ops.letterbox_into(
             frames,
             out.pointer,
             out.nbytes,
@@ -230,7 +235,7 @@ class NativeImageOps(ImageOps):
         geometries = [
             LetterboxGeometry.plan(frame.shape[:2], (target_h, target_w)) for frame in frames
         ]
-        _assert_geometry_agrees(geometries, scales, pads)
+        _assert_geometry_agrees(geometries, scales, pads, extents)
         return geometries
 
     def crop_batch_into(
@@ -328,9 +333,21 @@ class NativeImageOps(ImageOps):
 
 
 def _assert_geometry_agrees(
-    geometries: Sequence[LetterboxGeometry], scales: np.ndarray, pads: np.ndarray
+    geometries: Sequence[LetterboxGeometry],
+    scales: np.ndarray,
+    pads: np.ndarray,
+    extents: np.ndarray,
 ) -> None:
     """Fail loudly if C++ and Python rounded the letterbox differently.
+
+    The **resized extent** is compared as well as the scale and the pads, and it is the one
+    that matters most: the kernel's sampling ratio is ``view.height / view.out_h``, so ``out_h``
+    is the number that decides where every row is read from, and Python re-derives it from the
+    scale rather than being told. Those two derivations can differ by a pixel while the scale
+    and the pad still match to the bit — ``pad = (T - r) // 2`` is the same for ``r`` and
+    ``r + 1`` whenever ``T - r`` is even, so a 7-row source at scale 0.5 into a 100-row canvas
+    pads to 48 whether the extent is 3 or 4 — and the earlier version of this guard compared
+    only the numbers that agreed.
 
     Raises:
         InferenceError: the two implementations of conventions 2 and 3 have drifted. This is
@@ -339,6 +356,16 @@ def _assert_geometry_agrees(
             cameras.
     """
     for index, geometry in enumerate(geometries):
+        kernel_extent = (int(extents[index][0]), int(extents[index][1]))
+        python_extent = (geometry.resized_height, geometry.resized_width)
+        if kernel_extent != python_extent:
+            raise InferenceError(
+                f"native letterbox resized extent disagrees with the Python convention for "
+                f"image {index}: kernel resized to {kernel_extent[0]}x{kernel_extent[1]}, "
+                f"Python to {python_extent[0]}x{python_extent[1]}. The kernel samples at "
+                f"height / out_h, so every row of that image is read from the wrong ratio — "
+                f"and the pad can still match, which is why the extent is compared"
+            )
         if (
             abs(float(scales[index]) - geometry.scale) > _GEOMETRY_EPSILON
             or abs(float(pads[index][0]) - geometry.pad_left) > _GEOMETRY_EPSILON
