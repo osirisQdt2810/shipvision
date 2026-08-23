@@ -11,6 +11,17 @@ from shipvision.reid.distance import normalize
 
 __all__ = ["EmaAggregator"]
 
+#: `weight` is a fraction of the step, not a count of observations, so it has a top as well
+#: as a bottom. Past 1 the mixing coefficient `1 - (1 - alpha) * weight` goes negative and
+#: the update extrapolates *away* from the running vector: alpha 0.9 with weight 20 gives
+#: -1.0, and the result sits at cos = -0.497 from where it started. A caller passing a large
+#: number means "trust this a lot", and the arithmetic does the opposite of that.
+_WEIGHT_RANGE = (
+    "weight must be in [0, 1] — it scales how far the update moves, so 1 is the whole step "
+    "the configured alpha allows and there is nothing above it; got {bad:g}, which would "
+    "make the mixing coefficient negative and push the vector away from the observation"
+)
+
 
 @AGGREGATORS.register("ema", backend=PYTHON, aliases=("exponential",))
 class EmaAggregator(FeatureAggregator):
@@ -46,6 +57,9 @@ class EmaAggregator(FeatureAggregator):
 
         Order matters here and does not for a mean. Rows are taken as chronological
         because that is the only order an EMA has an opinion about.
+
+        Weights are per-row trust in [0, 1], validated up front — see :data:`_WEIGHT_RANGE`
+        for why the upper bound is not optional.
         """
         rows = np.atleast_2d(np.asarray(vectors, dtype=np.float32))
         if rows.shape[0] == 0:
@@ -57,6 +71,14 @@ class EmaAggregator(FeatureAggregator):
         )
         if w.shape[0] != rows.shape[0]:
             raise ConfigurationError(f"{w.shape[0]} weights for {rows.shape[0]} vectors")
+        # The whole vector, before anything is folded: a bad weight in the middle would
+        # otherwise be discovered halfway through a fold that has to be thrown away.
+        if np.any(w < 0):
+            raise ConfigurationError("weights must be non-negative")
+        if np.any(w > 1.0):
+            raise ConfigurationError(_WEIGHT_RANGE.format(bad=float(w.max())))
+        if not np.any(w > 0):
+            raise ConfigurationError("at least one weight must be positive")
 
         current: np.ndarray | None = None
         for row, weight in zip(rows, w, strict=True):
@@ -69,6 +91,8 @@ class EmaAggregator(FeatureAggregator):
     ) -> np.ndarray:
         if weight < 0:
             raise ConfigurationError(f"weight must be non-negative, got {weight}")
+        if weight > 1.0:
+            raise ConfigurationError(_WEIGHT_RANGE.format(bad=weight))
         row = np.asarray(observation, dtype=np.float32).reshape(-1)
         if current is None:
             return normalize(row)

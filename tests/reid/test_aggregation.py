@@ -157,3 +157,49 @@ def test_updating_across_a_width_change_is_refused() -> None:
 def test_an_unknown_name_lists_what_there_is() -> None:
     with pytest.raises(ConfigurationError, match="available"):
         AGGREGATORS.build("bilinear-vibes")
+
+
+class TestTheEmaRefusesAWeightItCannotMix:
+    """`weight` scales how far an update moves, so it is a fraction of the step, not a
+    count. `effective = 1 - (1 - alpha) * weight` is only a convex mixture while weight is
+    in [0, 1]; above that it goes negative and the update *extrapolates away* from the
+    running vector — exactly backwards from what the comment above that line promises, and
+    the opposite of what a caller passing a big number for "trust this a lot" expects.
+    """
+
+    def test_a_weight_above_one_is_refused_rather_than_extrapolated(self) -> None:
+        aggregator = AGGREGATORS.build("ema", alpha=0.9)
+        a, b = normalize(view_of(1)), normalize(view_of(2))
+        current = aggregator.update(None, a)
+
+        with pytest.raises(ConfigurationError, match="in .0, 1."):
+            aggregator.update(current, b, weight=20.0)
+
+    def test_the_old_behaviour_is_the_bug_being_prevented(self) -> None:
+        """Kept as a statement of what the guard buys: with `weights=[1, 20]` and alpha 0.9
+        the second row produced ``effective = -1.0``, and the result pointed *away* from the
+        running vector at cos = -0.497. No weight can legitimately do that."""
+        aggregator = AGGREGATORS.build("ema", alpha=0.9)
+        rows = normalize(np.eye(2, dtype=np.float32))
+
+        with pytest.raises(ConfigurationError, match="in .0, 1."):
+            aggregator.aggregate(rows, weights=np.array([1.0, 20.0]))
+
+    def test_the_whole_weight_vector_is_checked_before_anything_is_folded(self) -> None:
+        aggregator = AGGREGATORS.build("ema")
+        rows = normalize(np.stack([view_of(1), view_of(2), view_of(3)]))
+
+        with pytest.raises(ConfigurationError, match="non-negative"):
+            aggregator.aggregate(rows, weights=np.array([1.0, -0.5, 1.0]))
+        with pytest.raises(ConfigurationError, match="positive"):
+            aggregator.aggregate(rows, weights=np.zeros(3))
+
+    def test_the_ends_of_the_range_still_mean_what_they_meant(self) -> None:
+        """The guard must not move the two values the docstring makes promises about."""
+        aggregator = AGGREGATORS.build("ema", alpha=0.75)
+        a, b = normalize(view_of(1)), normalize(view_of(2))
+        current = aggregator.update(None, a)
+
+        assert np.allclose(aggregator.update(current, b, weight=0.0), current)
+        moved = aggregator.update(current, b, weight=1.0)
+        assert np.allclose(moved, normalize(0.75 * current + 0.25 * b))
