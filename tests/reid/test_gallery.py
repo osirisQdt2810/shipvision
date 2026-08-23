@@ -468,3 +468,60 @@ class TestFlatGalleryBookkeepingUnderChurn:
             8,
             9,
         ]
+
+
+class TestTheCameraTableIsBoundedToo:
+    """ "Nothing grows without bound" has to include the derived tables.
+
+    The camera-id interning table grew on every unseen id and shrank on nothing — not even
+    `clear`. Bounded in practice by the fifty or so RTSP streams a deployment has, so this is
+    not a leak anyone would notice; the point is that the invariant is now enforced where it
+    used to be assumed. What actually reaches the cap is a caller minting an id per frame or
+    per track, and its only other symptom is a few unexplained megabytes per hundred
+    thousand frames.
+    """
+
+    @pytest.mark.parametrize("name", GALLERY_NAMES)
+    def test_clear_forgets_the_camera_names_as_well_as_the_vectors(self, name: str) -> None:
+        gallery = GALLERIES.build(name, capacity=4)
+        for i in range(500):
+            gallery.add(
+                Embedding(vector=view_of(i % 7), identity=f"ship-{i}", camera_id=f"cam-{i}")
+            )
+        assert len(gallery._cameras) == 500, "the table is what the test is about"
+
+        gallery.clear()
+
+        assert len(gallery._cameras) == 0
+        assert len(gallery) == 0
+        gallery.add(Embedding(vector=view_of(1), identity="ship-1", camera_id="cam-new"))
+        assert gallery.query(view_of(1, view=2), exclude_camera="cam-new").best is None
+
+    @pytest.mark.parametrize("name", GALLERY_NAMES)
+    def test_an_endless_stream_of_distinct_camera_ids_is_refused(self, name: str) -> None:
+        """A four-entry gallery holding fifty thousand camera names is the shape of the bug:
+        the bounded thing is bounded and the table beside it is not."""
+        gallery = GALLERIES.build(name, capacity=4)
+
+        with pytest.raises(ConfigurationError, match="camera id"):
+            for i in range(6_000):
+                gallery.add(
+                    Embedding(vector=view_of(i % 5), identity=f"ship-{i}", camera_id=f"cam-{i}")
+                )
+
+        assert len(gallery._cameras) <= 4_096
+        assert len(gallery) == 4, "and the refusal left the gallery itself intact"
+
+    @pytest.mark.parametrize("name", GALLERY_NAMES)
+    def test_a_query_naming_an_unknown_camera_does_not_add_it_to_the_table(
+        self, name: str
+    ) -> None:
+        """Queries arrive at frame rate. Interning on the read path is how the table grows
+        without a single entry ever being stored."""
+        gallery = GALLERIES.build(name)
+        gallery.add(Embedding(vector=view_of(1), identity="ship-1", camera_id="cam-a"))
+
+        for i in range(200):
+            assert gallery.query(view_of(1, view=3), exclude_camera=f"never-{i}").best
+
+        assert len(gallery._cameras) == 1

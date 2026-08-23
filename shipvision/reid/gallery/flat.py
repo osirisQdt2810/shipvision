@@ -11,13 +11,12 @@ import numpy as np
 from shipvision.errors import ConfigurationError, DimensionMismatchError
 from shipvision.registry import PYTHON
 from shipvision.reid.distance import cosine_similarity, normalize
+from shipvision.reid.gallery._cameras import NO_CAMERA, CameraCodec
 from shipvision.reid.gallery.base import GALLERIES, BaseGallery
 from shipvision.reid.types import Match, QueryResult
 from shipvision.types import Embedding
 
 __all__ = ["FlatGallery"]
-
-_NO_CAMERA = -1
 
 
 @GALLERIES.register("flat", backend=PYTHON, aliases=("exact",))
@@ -44,6 +43,12 @@ class FlatGallery(BaseGallery):
     re-identification off the frame budget. Only the identity strings stay a list, because
     only the k selected rows are ever read from it.
 
+    Camera ids are interned to those integer codes by a :class:`CameraCodec`, which is
+    bounded like everything else here: a deployment has as many camera ids as it has RTSP
+    streams, so an unbounded stream of distinct ones means a caller is minting an id per
+    frame, and ``clear`` resets the table rather than keeping the names of entries that are
+    gone.
+
     Adding writes one row; evicting swaps the last live row into the hole. Swap-with-last
     keeps the matrix contiguous for the gemm with no reallocation, at the cost of stable
     entry indices — which is why :class:`Match` carries an index for immediate use rather
@@ -69,13 +74,12 @@ class FlatGallery(BaseGallery):
         self._size = 0
 
         self._identity: list[str] = []
-        self._camera_code = np.full(capacity, _NO_CAMERA, dtype=np.int32)
+        self._camera_code = np.full(capacity, NO_CAMERA, dtype=np.int32)
         self._frame = np.zeros(capacity, dtype=np.int64)
         self._has_frame = np.zeros(capacity, dtype=bool)
         self._sequence = np.zeros(capacity, dtype=np.int64)
 
-        self._camera_codes: dict[str, int] = {}
-        self._camera_names: list[str] = []
+        self._cameras = CameraCodec()
         self._by_identity: dict[str, list[int]] = defaultdict(list)
         self._next_sequence = 0
         self._lock = threading.RLock()
@@ -111,16 +115,18 @@ class FlatGallery(BaseGallery):
             )
         with self._lock:
             self._ensure_dim(embedding.dim)
-            # Normalised first because normalising is also where a non-finite vector is
-            # refused, and a refusal must not leave an eviction behind it.
+            # Both of these can refuse the embedding, and both run before anything is
+            # written or evicted: a rejected add must leave the gallery exactly as it was.
+            # Normalising is also where a non-finite vector is stopped.
             vector = normalize(embedding.vector)
+            code = self._cameras.code_for(embedding.camera_id)
             self._make_room(embedding.identity)
 
             index = self._size
             assert self._vectors is not None
             self._vectors[index] = vector
             self._identity.append(embedding.identity)
-            self._camera_code[index] = self._code_for(embedding.camera_id)
+            self._camera_code[index] = code
             self._has_frame[index] = embedding.frame_id is not None
             self._frame[index] = embedding.frame_id or 0
             self._sequence[index] = self._next_sequence
@@ -148,8 +154,11 @@ class FlatGallery(BaseGallery):
             self._size = 0
             self._identity.clear()
             self._by_identity.clear()
-            self._camera_code[:] = _NO_CAMERA
+            self._camera_code[:] = NO_CAMERA
             self._has_frame[:] = False
+            # The name table is derived state; a gallery that has forgotten every entry must
+            # not still be holding the names those entries came with.
+            self._cameras.clear()
 
     # -- reading ----------------------------------------------------------------------
 
@@ -201,7 +210,7 @@ class FlatGallery(BaseGallery):
             vectors = self._vectors[:size]
             codes = self._camera_code[:size]
             stamps = self._sequence[:size].copy()
-            exclude = self._camera_codes.get(exclude_camera)
+            exclude = self._cameras.lookup(exclude_camera)
 
         scores = cosine_similarity(probe, vectors)[0]
 
@@ -230,7 +239,7 @@ class FlatGallery(BaseGallery):
                     identity=self._identity[row],
                     score=float(scores[row]),
                     entry_index=row,
-                    camera_id=self._name_for(int(self._camera_code[row])),
+                    camera_id=self._cameras.name_for(int(self._camera_code[row])),
                     frame_id=int(self._frame[row]) if self._has_frame[row] else None,
                 )
                 for row in (int(i) for i in top)
@@ -256,19 +265,6 @@ class FlatGallery(BaseGallery):
                 f"gallery holds {self._dim}-d vectors, got a {dim}-d one; two models are "
                 f"feeding one gallery"
             )
-
-    def _code_for(self, camera_id: str | None) -> int:
-        if camera_id is None:
-            return _NO_CAMERA
-        code = self._camera_codes.get(camera_id)
-        if code is None:
-            code = len(self._camera_names)
-            self._camera_codes[camera_id] = code
-            self._camera_names.append(camera_id)
-        return code
-
-    def _name_for(self, code: int) -> str | None:
-        return None if code == _NO_CAMERA else self._camera_names[code]
 
     def _make_room(self, identity: str) -> None:
         """Evict until this identity may take one more row."""
@@ -301,7 +297,7 @@ class FlatGallery(BaseGallery):
             rows[rows.index(last)] = index
 
         self._identity.pop()
-        self._camera_code[last] = _NO_CAMERA
+        self._camera_code[last] = NO_CAMERA
         self._has_frame[last] = False
         self._size -= 1
         if not self._by_identity[victim]:
