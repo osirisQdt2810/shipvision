@@ -40,6 +40,7 @@ from shipvision.imgproc.base import (
     resolve_normalisation,
     validate_boxes,
     validate_image,
+    validate_pad_value,
 )
 from shipvision.imgproc.geometry import (
     LetterboxGeometry,
@@ -139,6 +140,7 @@ class TorchImageOps(ImageOps):
         frames = as_image_batch(images)
         target_h, target_w = validate_target_hw(target_hw)
         mean_array, std_array = resolve_normalisation(mean, std)
+        pad_value = validate_pad_value(pad_value)
         mean_t = self._as_channel_vector(mean_array)
         std_t = self._as_channel_vector(std_array)
 

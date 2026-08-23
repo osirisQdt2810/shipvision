@@ -278,3 +278,139 @@ class TestTheExtensionGuardsItself:
 
         assert np.isfinite(batch).all()
         assert IMGPROC.build("default", backend=PYTHON) is not None
+
+
+class TestPadValue:
+    """The letterbox fill is a 0-255 source-scale value, and out-of-range means out-of-range.
+
+    Unchecked, it was cast to ``unsigned char`` in C++ and used as a float in Python, so the
+    three backends disagreed on every value outside the range: ``256`` gave numpy and torch
+    256.0 and the native backend **0.0**; ``-1`` gave -1.0 against **255.0**, which is white
+    bars where grey ones were asked for; ``300`` gave 44.0. A config with a typo in it produced
+    a different image on the GPU than in the oracle, and the parity suite never passes an
+    out-of-range value so nothing said so.
+    """
+
+    @pytest.mark.parametrize("pad_value", [256, -1, 300, 1000, -255])
+    def test_a_value_outside_the_source_scale_is_refused(self, candidate, pad_value) -> None:
+        with pytest.raises(ConfigurationError, match="pad_value"):
+            candidate.letterbox(
+                np.zeros((8, 12, 3), dtype=np.uint8), (16, 16), pad_value=pad_value
+            )
+
+    @pytest.mark.parametrize("pad_value", [0, 114, 255])
+    def test_the_ends_of_the_range_are_accepted(self, candidate, pad_value) -> None:
+        """Inclusive at both ends: black bars and white bars are both legitimate requests, and
+        a boundary that excluded them would be a different bug."""
+        batch, _ = candidate.letterbox(
+            np.zeros((8, 12, 3), dtype=np.uint8),
+            (16, 16),
+            pad_value=pad_value,
+            std=(1.0, 1.0, 1.0),
+        )
+
+        assert batch[0, 0, 0, 0] == pytest.approx(float(pad_value))
+
+    def test_a_non_integer_pad_value_is_refused(self, candidate) -> None:
+        """114.5 is not a source-scale level. C++ would truncate it and numpy would not."""
+        with pytest.raises(ConfigurationError, match="pad_value"):
+            candidate.letterbox(np.zeros((8, 12, 3), dtype=np.uint8), (16, 16), pad_value=114.5)
+
+
+class TestNormalisation:
+    """``std`` must be finite and positive, and ``mean`` finite.
+
+    ``resolve_normalisation`` rejected only ``std == 0``. Everything else went straight through:
+    ``std=(-255, 255, 255)`` silently inverts the red channel — an image that looks like a
+    photographic negative in one channel, which a model does not error on, it just gets worse —
+    and ``std=(nan, ...)`` produces an all-NaN tensor that poisons every downstream reduction.
+    Both are start-up mistakes, and this library's rule is that a bad config fails at start-up
+    rather than at frame 40 000.
+    """
+
+    @pytest.mark.parametrize(
+        "std",
+        [
+            (-255.0, 255.0, 255.0),
+            (255.0, -1.0, 255.0),
+            (np.nan, 255.0, 255.0),
+            (255.0, np.inf, 255.0),
+            (0.0, 255.0, 255.0),
+        ],
+    )
+    def test_a_std_that_is_not_finite_and_positive_is_refused(self, candidate, std) -> None:
+        with pytest.raises(ConfigurationError, match="std"):
+            candidate.letterbox(np.zeros((8, 12, 3), dtype=np.uint8), (16, 16), std=std)
+
+    @pytest.mark.parametrize("mean", [(np.nan, 0.0, 0.0), (0.0, np.inf, 0.0)])
+    def test_a_non_finite_mean_is_refused(self, candidate, mean) -> None:
+        """The same failure by the other route: ``(value - nan) / std`` is NaN everywhere."""
+        with pytest.raises(ConfigurationError, match="mean"):
+            candidate.letterbox(np.zeros((8, 12, 3), dtype=np.uint8), (16, 16), mean=mean)
+
+    def test_the_crop_path_refuses_them_too(self, candidate) -> None:
+        """Same validator, and the crop path is the one that runs 15 000 times a second."""
+        boxes = np.array([[0.0, 0.0, 8.0, 8.0]], dtype=np.float32)
+
+        with pytest.raises(ConfigurationError, match="std"):
+            candidate.crop_batch(
+                np.zeros((16, 16, 3), dtype=np.uint8), boxes, (8, 8), std=(-1.0, 1.0, 1.0)
+            )
+
+    def test_imagenet_statistics_still_work(self, candidate) -> None:
+        """The check must not reject the values a real checkpoint publishes."""
+        batch, _ = candidate.letterbox(
+            np.zeros((8, 12, 3), dtype=np.uint8),
+            (16, 16),
+            mean=(123.675, 116.28, 103.53),
+            std=(58.395, 57.12, 57.375),
+        )
+
+        assert np.isfinite(batch).all()
+
+
+@pytest.mark.native
+@pytest.mark.skipif(not NATIVE_BUILT, reason="shipvision._C is not built, or there is no GPU")
+class TestTheExtensionRefusesThemToo:
+    """``_C`` is reachable without the Python layer, so it validates for itself.
+
+    Same argument as the zero-extent frame: the entry points are public, the cast is silent,
+    and a caller that reached ``letterbox_into`` directly would get white bars for ``-1`` with
+    nothing to tell it why.
+    """
+
+    @pytest.mark.parametrize("pad_value", [-1, 256, 300])
+    def test_an_out_of_range_pad_value_is_refused(self, pad_value: int) -> None:
+        from shipvision import _C
+
+        ops = _C.ImageOps(device_index=0)
+
+        with pytest.raises(ValueError, match="pad_value"):
+            ops.letterbox_batch(
+                [np.zeros((8, 8, 3), dtype=np.uint8)],
+                16,
+                16,
+                [0.0, 0.0, 0.0],
+                [255.0, 255.0, 255.0],
+                True,
+                pad_value,
+                0,
+            )
+
+    @pytest.mark.parametrize("std", [[-255.0, 255.0, 255.0], [float("nan"), 255.0, 255.0]])
+    def test_a_std_that_is_not_finite_and_positive_is_refused(self, std) -> None:
+        from shipvision import _C
+
+        ops = _C.ImageOps(device_index=0)
+
+        with pytest.raises(ValueError, match="std"):
+            ops.letterbox_batch(
+                [np.zeros((8, 8, 3), dtype=np.uint8)],
+                16,
+                16,
+                [0.0, 0.0, 0.0],
+                std,
+                True,
+                114,
+                0,
+            )

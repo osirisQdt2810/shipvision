@@ -26,6 +26,7 @@ from shipvision.imgproc.base import (
     resolve_normalisation,
     validate_boxes,
     validate_image,
+    validate_pad_value,
 )
 from shipvision.imgproc.geometry import (
     LetterboxGeometry,
@@ -58,6 +59,7 @@ class NumpyImageOps(ImageOps):
         frames = as_image_batch(images)
         target_h, target_w = validate_target_hw(target_hw)
         mean_array, std_array = resolve_normalisation(mean, std)
+        pad_value = validate_pad_value(pad_value)
 
         out = np.empty((len(frames), 3, target_h, target_w), dtype=np.float32)
         # The bars are written before the resized image is pasted over the middle, so the

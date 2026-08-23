@@ -44,6 +44,7 @@ from shipvision.imgproc.base import (
     resolve_normalisation,
     validate_boxes,
     validate_image,
+    validate_pad_value,
 )
 from shipvision.imgproc.geometry import LetterboxGeometry, validate_target_hw
 from shipvision.imgproc.nms import CLASSIC, prepare, suppress
@@ -190,6 +191,7 @@ class NativeImageOps(ImageOps):
         frames = as_image_batch(images)
         target_h, target_w = validate_target_hw(target_hw)
         mean_array, std_array = resolve_normalisation(mean, std)
+        pad_value = validate_pad_value(pad_value)
 
         tensor, scales, pads, extents = self._ops.letterbox_batch(
             frames,
@@ -264,6 +266,7 @@ class NativeImageOps(ImageOps):
         frames = as_image_batch(images)
         target_h, target_w = validate_target_hw(target_hw)
         mean_array, std_array = resolve_normalisation(mean, std)
+        pad_value = validate_pad_value(pad_value)
         out.require(nchw_nbytes(len(frames), (target_h, target_w)), self._device_index)
 
         scales, pads, extents = self._ops.letterbox_into(

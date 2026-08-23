@@ -32,6 +32,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -56,13 +57,31 @@ namespace {
     }
     NormalizeParams params;
     for (int i = 0; i < 3; ++i) {
-      if (std[i] == 0.f)
-        throw std::invalid_argument("normalisation std must be non-zero");
+      // Finite and positive, not merely non-zero. A negative divisor inverts that channel and
+      // a NaN makes the whole tensor NaN, and neither raises anywhere downstream — the model
+      // simply gets worse. Checked here as well as in Python because these entry points are
+      // reachable without it.
+      if (!std::isfinite(std[i]) || std[i] <= 0.f)
+        throw std::invalid_argument("normalisation std must be finite and positive");
+      if (!std::isfinite(mean[i]))
+        throw std::invalid_argument("normalisation mean must be finite");
       params.mean[i] = mean[i];
       params.std[i] = std[i];
     }
     params.swap_rb = swap_rb;
     return params;
+  }
+
+  /// A whole letterbox fill level in [0, 255].
+  ///
+  /// `static_cast<unsigned char>` is silent: 256 fills with 0 and -1 fills with 255, so a
+  /// config typo produced white bars on this path and the requested value on the numpy one,
+  /// with nothing to say the two disagreed.
+  unsigned char checked_pad_value(int pad_value) {
+    if (pad_value < 0 || pad_value > 255) {
+      throw std::invalid_argument("pad_value must be in [0, 255]");
+    }
+    return static_cast<unsigned char>(pad_value);
   }
 
   /// One source frame, resolved to a raw pointer and its letterbox geometry.
@@ -113,12 +132,12 @@ namespace {
         auto extents = py::array_t<int>(
             {static_cast<py::ssize_t>(images.size()), static_cast<py::ssize_t>(2)});
         const auto params = make_params(mean, std, swap_rb);
+        const auto fill = checked_pad_value(pad_value);
         const auto plans = plan_frames(images, dst_h, dst_w, out_bytes, scales.mutable_data(),
                                        pads.mutable_data(), extents.mutable_data());
         {
           py::gil_scoped_release release;
-          run_letterbox(plans, reinterpret_cast<float*>(out_ptr), dst_h, dst_w, params,
-                        static_cast<unsigned char>(pad_value),
+          run_letterbox(plans, reinterpret_cast<float*>(out_ptr), dst_h, dst_w, params, fill,
                         reinterpret_cast<gpuStream_t>(stream_handle));
         }
         return py::make_tuple(scales, pads, extents);
@@ -140,6 +159,7 @@ namespace {
         auto extents = py::array_t<int>(
             {static_cast<py::ssize_t>(images.size()), static_cast<py::ssize_t>(2)});
         const auto params = make_params(mean, std, swap_rb);
+        const auto fill = checked_pad_value(pad_value);
         const auto plans = plan_frames(images, dst_h, dst_w, bytes, scales.mutable_data(),
                                        pads.mutable_data(), extents.mutable_data());
         auto* host_out = result.mutable_data();
@@ -147,8 +167,7 @@ namespace {
           py::gil_scoped_release release;
           const auto stream = reinterpret_cast<gpuStream_t>(stream_handle);
           auto* device_out = static_cast<float*>(output_.reserve(bytes));
-          run_letterbox(plans, device_out, dst_h, dst_w, params,
-                        static_cast<unsigned char>(pad_value), stream);
+          run_letterbox(plans, device_out, dst_h, dst_w, params, fill, stream);
           download(device_out, host_out, bytes, stream);
         }
         return py::make_tuple(result, scales, pads, extents);

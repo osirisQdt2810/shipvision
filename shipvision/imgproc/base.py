@@ -52,6 +52,7 @@ __all__ = [
     "resolve_normalisation",
     "validate_boxes",
     "validate_image",
+    "validate_pad_value",
 ]
 
 DEFAULT_MEAN: tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -130,10 +131,44 @@ def as_image_batch(images: Sequence[np.ndarray] | np.ndarray) -> list[np.ndarray
     return frames
 
 
+def validate_pad_value(pad_value: int) -> int:
+    """A whole letterbox fill level in ``[0, 255]``. Shared by all three backends.
+
+    Unvalidated, this was the one argument on which the backends openly disagreed: C++ does
+    ``static_cast<unsigned char>``, so ``256`` became 0 and ``-1`` became 255 — white bars
+    instead of grey — while numpy and torch used the number as given. Nothing errored, the
+    parity suite never passes an out-of-range value, and the difference is a band around every
+    frame on the GPU path only.
+
+    Raises:
+        ConfigurationError: not an integer, or outside the 0-255 source scale.
+    """
+    if isinstance(pad_value, bool) or int(pad_value) != pad_value:
+        raise ConfigurationError(
+            f"pad_value must be a whole 0-255 source-scale level, got {pad_value!r}. The "
+            f"native backend truncates towards zero and the numpy one does not"
+        )
+    value = int(pad_value)
+    if not 0 <= value <= 255:
+        raise ConfigurationError(
+            f"pad_value must be in [0, 255], got {value}. The native backend casts it to "
+            f"unsigned char, so 256 would fill with 0 and -1 with 255 — white bars, silently"
+        )
+    return value
+
+
 def resolve_normalisation(
     mean: Sequence[float] | None, std: Sequence[float] | None
 ) -> tuple[np.ndarray, np.ndarray]:
-    """``(3,)`` float32 mean and std in the 0-255 source scale, RGB order. Convention 4."""
+    """``(3,)`` float32 mean and std in the 0-255 source scale, RGB order. Convention 4.
+
+    ``std`` must be finite and **positive**, and ``mean`` finite. Only ``std == 0`` used to be
+    refused, which left the two failures that do not announce themselves: a negative divisor
+    inverts that channel — a photographic negative in one plane, which a model does not error
+    on, it merely gets worse — and a non-finite entry produces an all-NaN tensor that poisons
+    every reduction downstream of it. Both are configuration mistakes, so they fail here, at
+    start-up, rather than on frame 40 000.
+    """
     mean_array = np.asarray(DEFAULT_MEAN if mean is None else mean, dtype=np.float32)
     std_array = np.asarray(DEFAULT_STD if std is None else std, dtype=np.float32)
     if mean_array.shape != (3,) or std_array.shape != (3,):
@@ -141,8 +176,17 @@ def resolve_normalisation(
             f"mean and std must each have three entries, got {mean_array.shape} and "
             f"{std_array.shape}"
         )
-    if np.any(std_array == 0.0):
-        raise ConfigurationError(f"normalisation std must be non-zero, got {std_array}")
+    if not np.all(np.isfinite(mean_array)):
+        raise ConfigurationError(
+            f"normalisation mean must be finite, got {mean_array}. A non-finite mean makes "
+            f"every pixel NaN, and a NaN propagates through every reduction after it"
+        )
+    if not np.all(np.isfinite(std_array)) or np.any(std_array <= 0.0):
+        raise ConfigurationError(
+            f"normalisation std must be finite and positive, got {std_array}. A negative "
+            f"divisor inverts that channel and a non-finite one makes the whole tensor NaN; "
+            f"neither raises anywhere downstream"
+        )
     return mean_array, std_array
 
 
