@@ -1,0 +1,142 @@
+"""The top-level surface: what `import shipvision` costs, and what it gives you.
+
+Both halves are load-bearing. `from shipvision import TRACKERS` is the documented entry
+point in CLAUDE.md and the README, so it has to work — and `import shipvision` has to stay
+free of torch, scipy, cv2 and TensorRT, because the offline test tier and every evaluation
+run on a laptop depend on the library importing where none of those exist.
+
+Those two requirements pull against each other: reading a family's registry means importing
+the family, and importing `shipvision.detection` runs the module body that registers the
+TensorRT backend. PEP 562's module `__getattr__` is what reconciles them, and these tests
+are what stop a later `from shipvision.detection import DETECTORS` at the top of
+`__init__.py` from quietly undoing it.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+
+import pytest
+
+import shipvision
+
+HEAVY = ("torch", "scipy", "cv2", "tensorrt")
+
+#: Read from the package rather than duplicated here, so a family added to the lookup table
+#: is tested automatically and a family declared before it exists fails immediately. A
+#: hand-maintained copy would drift, and the drift would be silent in the direction that
+#: matters: a registry nobody tests.
+REGISTRIES = tuple(shipvision._REGISTRY_HOMES)
+
+
+class TestImportCost:
+    """`import shipvision` must not drag in an accelerator stack."""
+
+    def test_importing_the_package_loads_nothing_heavy(self) -> None:
+        """Run in a fresh interpreter: this test process has already imported plenty, so
+        checking `sys.modules` in-process would prove nothing."""
+        code = (
+            "import sys, shipvision; "
+            f"print(sorted(m for m in {HEAVY!r} if m in sys.modules))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        )
+
+        assert result.stdout.strip() == "[]", (
+            f"import shipvision pulled in {result.stdout.strip()} — something in "
+            f"__init__.py is importing a family eagerly"
+        )
+
+    def test_the_contract_types_are_available_without_touching_a_family(self) -> None:
+        code = (
+            "import sys, shipvision; "
+            "shipvision.Detection(box=[0, 0, 1, 1]); "
+            "shipvision.FrameTag(camera_id='c', frame_id=0); "
+            f"print(sorted(m for m in {HEAVY!r} if m in sys.modules))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        )
+
+        assert result.stdout.strip() == "[]"
+
+
+class TestRegistryExports:
+    """Every family's registry is reachable from the top level, resolved on first access."""
+
+    @pytest.mark.parametrize("name", REGISTRIES)
+    def test_a_registry_is_reachable_from_the_top_level(self, name: str) -> None:
+        registry = getattr(shipvision, name)
+
+        assert hasattr(registry, "names")
+        assert hasattr(registry, "build")
+
+    @pytest.mark.parametrize("name", REGISTRIES)
+    def test_a_registry_is_declared_in_all(self, name: str) -> None:
+        """Otherwise `from shipvision import *` and a documentation build disagree with what
+        actually resolves."""
+        assert name in shipvision.__all__
+
+    @pytest.mark.parametrize("name", REGISTRIES)
+    def test_the_second_access_is_cached(self, name: str) -> None:
+        first = getattr(shipvision, name)
+        second = getattr(shipvision, name)
+
+        assert first is second
+        assert name in vars(shipvision), "resolution should memoise into module globals"
+
+    def test_every_declared_family_actually_resolves(self) -> None:
+        """The lookup table is a promise. An entry naming a module that does not exist, or a
+        module that does not define the registry, must fail here rather than at the first
+        call site that trusts the documented entry point."""
+        for name, home in shipvision._REGISTRY_HOMES.items():
+            resolved = getattr(shipvision, name)
+            assert type(resolved).__name__ == "Registry", f"{name} in {home} is not a Registry"
+
+    def test_the_registries_are_not_all_the_same_object(self) -> None:
+        """A copy-paste slip in the lookup table would make every family share one registry,
+        and `TRACKERS.build("flat")` would then succeed."""
+        resolved = [getattr(shipvision, name) for name in REGISTRIES]
+
+        assert len({id(r) for r in resolved}) > 1
+
+    def test_dir_lists_the_lazy_names(self) -> None:
+        """Tab completion and `help()` read `__dir__`; a lazy attribute absent from it is
+        invisible to anyone exploring the package."""
+        listed = dir(shipvision)
+
+        for name in REGISTRIES:
+            assert name in listed
+
+    def test_an_unknown_attribute_raises_attribute_error(self) -> None:
+        """Not KeyError, and not a silent None — `getattr(shipvision, x, default)` and
+        `hasattr` both depend on this being AttributeError."""
+        with pytest.raises(AttributeError, match="no attribute 'NotAThing'"):
+            shipvision.NotAThing  # noqa: B018
+
+        assert not hasattr(shipvision, "NotAThing")
+        assert getattr(shipvision, "NotAThing", "fallback") == "fallback"
+
+
+class TestDocumentedEntryPoints:
+    """The exact lines that appear in CLAUDE.md and README.md must actually run."""
+
+    def test_the_claude_md_tracker_example_works(self) -> None:
+        from shipvision import TRACKERS
+
+        assert "bytetrack" in TRACKERS.names()
+        assert TRACKERS.build("bytetrack", track_threshold=0.5) is not None
+
+    def test_the_readme_gallery_example_works(self) -> None:
+        import numpy as np
+
+        from shipvision import GALLERIES, Embedding
+
+        gallery = GALLERIES.build("flat", per_identity=8)
+        gallery.add(
+            Embedding(vector=np.ones(32, np.float32), identity="ship-14", camera_id="cam-03")
+        )
+
+        assert len(gallery) == 1

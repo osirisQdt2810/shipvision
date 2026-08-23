@@ -53,11 +53,68 @@ from shipvision.types import (
 
 __version__ = "0.1.0"
 
+#: The registries, reachable from the top level but resolved on first access.
+#:
+#: `from shipvision import TRACKERS` has to work — it is the documented entry point — but
+#: importing the families eagerly would defeat the point of the library importing on a
+#: laptop with no GPU: `detection` reaches for TensorRT, `mtmc` for scipy and cv2, `imgproc`
+#: for torch. Each of those is lazy *within* its family, but merely importing the family to
+#: read its registry would run those lazy registrations' module bodies.
+#:
+#: PEP 562 module `__getattr__` defers the import to the attribute access that needs it, so
+#: `import shipvision` stays free and `shipvision.TRACKERS` costs exactly the one family.
+#: Every entry must actually resolve — `tests/test_package.py` reads this table rather than
+#: keeping its own list, so declaring a family before it exists fails the suite instead of
+#: waiting to fail a user.
+_REGISTRY_HOMES: dict[str, str] = {
+    "IMGPROC": "shipvision.imgproc",
+    "EXTRACTORS": "shipvision.reid",
+    "GALLERIES": "shipvision.reid",
+    "AGGREGATORS": "shipvision.reid",
+    "TRACKERS": "shipvision.tracking",
+    "CAMERA_MOTION": "shipvision.tracking",
+    "MTMC": "shipvision.mtmc",
+    "MATRIX_BUILDERS": "shipvision.mtmc",
+    "CLUSTERERS": "shipvision.mtmc",
+}
+
+
+def __getattr__(name: str) -> object:
+    """Resolve a registry on first access. See :data:`_REGISTRY_HOMES`."""
+    home = _REGISTRY_HOMES.get(name)
+    if home is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+
+    try:
+        module = import_module(home)
+    except ImportError as error:  # a family whose own dependencies are absent
+        raise AttributeError(
+            f"{name} lives in {home}, which could not be imported: {error}"
+        ) from error
+    value = getattr(module, name)
+    globals()[name] = value  # cache, so the second access is a plain global lookup
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_REGISTRY_HOMES))
+
+
 __all__ = [
+    "AGGREGATORS",
+    "CAMERA_MOTION",
+    "CLUSTERERS",
+    "EXTRACTORS",
+    "GALLERIES",
+    "IMGPROC",
+    "MATRIX_BUILDERS",
+    "MTMC",
     "NATIVE",
     "PYTHON",
     "TENSORRT",
     "TORCH",
+    "TRACKERS",
     "BackendUnavailableError",
     "ConfigurationError",
     "Detection",
