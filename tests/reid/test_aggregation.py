@@ -172,7 +172,7 @@ class TestTheEmaRefusesAWeightItCannotMix:
         a, b = normalize(view_of(1)), normalize(view_of(2))
         current = aggregator.update(None, a)
 
-        with pytest.raises(ConfigurationError, match="in .0, 1."):
+        with pytest.raises(ConfigurationError, match=r"in \[0, 1\]"):
             aggregator.update(current, b, weight=20.0)
 
     def test_the_old_behaviour_is_the_bug_being_prevented(self) -> None:
@@ -182,7 +182,7 @@ class TestTheEmaRefusesAWeightItCannotMix:
         aggregator = AGGREGATORS.build("ema", alpha=0.9)
         rows = normalize(np.eye(2, dtype=np.float32))
 
-        with pytest.raises(ConfigurationError, match="in .0, 1."):
+        with pytest.raises(ConfigurationError, match=r"in \[0, 1\]"):
             aggregator.aggregate(rows, weights=np.array([1.0, 20.0]))
 
     def test_the_whole_weight_vector_is_checked_before_anything_is_folded(self) -> None:
