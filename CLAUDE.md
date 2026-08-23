@@ -130,6 +130,25 @@ pytest -m native          # the compiled backends and the parity tests
 pytest -m gpu             # real devices
 ```
 
+**Tests are organised into classes, never bare module-level functions.** One class per
+coherent claim, so the class name and the method name read as a sentence together:
+
+```python
+class TestLetterboxInversion:
+    """A box decoded from network space must land back where it started in image pixels."""
+
+    def test_it_round_trips_at_a_non_integer_scale(self) -> None: ...
+    def test_an_odd_total_pad_splits_bottom_and_right(self) -> None: ...
+```
+
+Two collection rules that bite: the class name **must** start with `Test` or pytest does not
+collect it at all — a silently-uncollected file is worse than no file — and the class must
+not define `__init__`, or pytest skips it with a warning. Use fixtures or `setup_method` for
+shared state. Parametrize, fixtures and markers all work unchanged on methods, and
+`conftest.py` fixtures are still injected as method arguments. After any restructuring,
+check the collected **count** is unchanged; a drop means a class was misnamed and its tests
+vanished quietly.
+
 The offline tier must stay green **and stay GPU-free**. Deselecting a marker is not the same
 guarantee as having no device: an unmarked test can take a CUDA path by accident, pass on a
 dev box and fail on the runner. `scripts/run_tests.sh` exports `CUDA_VISIBLE_DEVICES=""` for
