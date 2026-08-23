@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from shipvision.imgproc import IMGPROC
-from shipvision.registry import PYTHON
+from tests.imgproc.conftest import backend_params
 
 ANCHOR = [0.0, 0.0, 10.0, 10.0]
 """10x10 at the origin. Area 100."""
@@ -38,10 +38,24 @@ DEGENERATE = [7.0, 7.0, 7.0, 7.0]
 """No area, so an IoU against itself is 0/0."""
 
 
-@pytest.fixture()
-def ops():
-    """The numpy backend: the definition of the answer for every method."""
-    return IMGPROC.build("default", backend=PYTHON)
+@pytest.fixture(params=backend_params())
+def ops(request):
+    """Every backend this machine can build, one at a time.
+
+    Numpy-only until now, which meant the decisions this directory exists to pin — the strict
+    ``iou >`` boundary, containment not counting as overlap, a zero-area box, the departure
+    rule — were never once put to the CUDA kernel or to ``torchvision.ops.nms``. Those are
+    precisely the cases where an independent implementation is most likely to differ, and the
+    parity suite next door only ever runs random proposals, where a boundary is never hit
+    exactly.
+
+    Parametrising here rather than adding a second copy of each test: the answer is the same
+    for every backend by definition, so the same assertion is the right one to make three
+    times. The skips and the ``native`` marker come from
+    :func:`tests.imgproc.conftest.backend_params`, so a laptop still runs this as the numpy
+    suite it was.
+    """
+    return IMGPROC.build("default", backend=request.param)
 
 
 def run(ops, boxes: list[list[float]], scores: list[float], **kwargs) -> list[int]:

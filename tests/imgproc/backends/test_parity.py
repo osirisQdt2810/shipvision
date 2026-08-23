@@ -32,7 +32,12 @@ VALUE_TOLERANCE = 1e-3
 
 # 1080x1920 is the fleet's resolution; 1077x1920 is the same frame with three rows missing,
 # which is what makes the vertical pad odd and the resized extent round rather than divide.
-SHAPES = [(1080, 1920), (1077, 1920), (720, 1280), (37, 53), (4, 4)]
+# 1079x1919 is there for a different reason: its byte count, 6 211 803, is odd, so a frame of
+# that shape leaves every offset after it in the staging ring unaligned. Every other shape here
+# is a multiple of 16 bytes, which is why the alignment claim below needs it — see
+# `align_up` in csrc/include/shipvision/core/platform.hpp, and the misaligned-address error
+# that comment describes, which is sticky.
+SHAPES = [(1080, 1920), (1077, 1920), (1079, 1919), (720, 1280), (37, 53), (4, 4)]
 
 CROP_BOXES = np.array(
     [
@@ -74,6 +79,16 @@ def test_letterbox_agrees_with_the_oracle(
     assert np.abs(actual - expected).max() < VALUE_TOLERANCE
 
 
+RAGGED_BATCH = [(1080, 1920), (1079, 1919), (720, 1280), (37, 53), (1077, 1920), (480, 640)]
+"""Six cameras, and the second one's byte count is odd on purpose.
+
+Without it every frame in the batch started at a 16-byte boundary, so the test could not see
+the case its own docstring claimed — the offsets were ``0, 6220800, 8985600, ...``, all
+multiples of 16. With ``1079x1919`` in second place they are ``0, 6220800, 12432603,
+15197403, 15203286, ...``: mod 16 that is ``0, 0, 11, 11, 6, 12``, which is the ragged
+alignment a real fleet produces."""
+
+
 def test_letterbox_agrees_on_a_ragged_batch(candidate, oracle) -> None:
     """Fifty cameras do not agree on resolution, so a ragged batch is the normal case.
 
@@ -82,17 +97,30 @@ def test_letterbox_agrees_on_a_ragged_batch(candidate, oracle) -> None:
     batch. Getting an offset wrong in that table shows up here and nowhere else.
     """
     rng = np.random.default_rng(11)
-    images = [
-        rng.integers(0, 256, size=(h, w, 3), dtype=np.uint8)
-        for h, w in [(1080, 1920), (720, 1280), (1077, 1920), (480, 640)]
-    ]
+    images = [rng.integers(0, 256, size=(h, w, 3), dtype=np.uint8) for h, w in RAGGED_BATCH]
 
     expected, expected_geometry = oracle.letterbox(images, (640, 640))
     actual, actual_geometry = candidate.letterbox(images, (640, 640))
 
-    assert actual.shape == (4, 3, 640, 640)
+    assert actual.shape == (len(RAGGED_BATCH), 3, 640, 640)
     assert actual_geometry == expected_geometry
     assert np.abs(actual - expected).max() < VALUE_TOLERANCE
+
+
+def test_the_ragged_batch_really_does_land_unaligned() -> None:
+    """The premise of the test above, asserted so it cannot rot.
+
+    A batch whose frames all happen to be 16-byte multiples exercises the descriptor table
+    without ever exercising an odd offset in it, and nothing about the test would say so. This
+    computes the offsets the native backend will use — one frame after another, ``h * w * 3``
+    bytes each — and requires that at least one is not 16-aligned.
+    """
+    offsets = np.cumsum([0, *(h * w * 3 for h, w in RAGGED_BATCH)])[:-1]
+
+    assert any(offset % 16 for offset in offsets), (
+        f"every frame in RAGGED_BATCH starts 16-byte aligned ({offsets % 16}), so this batch "
+        f"cannot see a misaligned descriptor offset"
+    )
 
 
 def test_letterbox_agrees_with_a_non_default_normalisation(
