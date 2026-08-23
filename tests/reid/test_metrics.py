@@ -145,3 +145,38 @@ def test_rank_is_one_indexed_as_everyone_writes_it() -> None:
     assert result.rank(1) == result.cmc[0]
     with pytest.raises(ConfigurationError, match="1-indexed"):
         result.rank(0)
+
+
+class TestTheCameraFilterCannotBeHalfSupplied:
+    """The protocol filter needs both camera lists, and forgetting one used to disable it.
+
+    Silently, and in the flattering direction. On the data below, both lists give rank-1
+    0.0000 and mAP 0.5000; either one alone gives 1.0000 and 0.8333 — the trivial
+    same-camera self-match counted as a hit, which the module docstring names as how an
+    implementation reports rank-1 in the high nineties and fails in the field. One missing
+    keyword argument is a plausible mistake, and its symptom is a better number.
+    """
+
+    IDS = ["a", "a", "b"]
+    CAMS = ["cam-1", "cam-2", "cam-1"]
+    SIM = np.asarray([[0.99, 0.10, 0.95]], dtype=np.float32)
+
+    def test_query_cameras_without_gallery_cameras_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError, match="both"):
+            evaluate_ranking(self.SIM, ["a"], self.IDS, query_cameras=["cam-1"])
+
+    def test_gallery_cameras_without_query_cameras_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError, match="both"):
+            evaluate_ranking(self.SIM, ["a"], self.IDS, gallery_cameras=self.CAMS)
+
+    def test_both_together_filter_and_neither_is_an_explicit_choice(self) -> None:
+        """Omitting both is still allowed: a single-camera dataset has nothing to exclude,
+        and the caller has said so by passing neither rather than by forgetting one."""
+        filtered = evaluate_ranking(
+            self.SIM, ["a"], self.IDS, query_cameras=["cam-1"], gallery_cameras=self.CAMS
+        )
+        unfiltered = evaluate_ranking(self.SIM, ["a"], self.IDS)
+
+        assert filtered.rank(1) == 0.0
+        assert filtered.mean_ap == pytest.approx(0.5)
+        assert unfiltered.rank(1) == 1.0, "the trivial self-match, counted on purpose"

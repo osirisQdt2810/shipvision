@@ -82,6 +82,10 @@ def evaluate_ranking(
         similarity: ``(n_query, n_gallery)``, higher is more alike. Cosine similarity, not
             a distance — passing a distance silently inverts every ranking, so the argument
             is named for what it must be.
+        query_cameras: one per query. Must be given together with `gallery_cameras`, or
+            not at all: the filter compares the two, so half of it cannot express the rule
+            and would be skipped — see the module docstring for what skipping it costs.
+        gallery_cameras: one per gallery entry. See `query_cameras`.
         max_rank: how far the CMC curve extends. Clamped to the gallery size.
 
     Both metrics come out of one ranking pass because they read the same sorted labels: CMC
@@ -102,6 +106,17 @@ def evaluate_ranking(
         )
     if max_rank < 1:
         raise ConfigurationError(f"max_rank must be positive, got {max_rank}")
+
+    if (query_cameras is None) != (gallery_cameras is None):
+        supplied = "query_cameras" if query_cameras is not None else "gallery_cameras"
+        raise ConfigurationError(
+            f"the camera filter needs both query_cameras and gallery_cameras; only "
+            f"{supplied} was given. One of them alone cannot express the protocol's rule — "
+            f"it discards a gallery entry that shares the query's identity *and* its camera "
+            f"— so the filter would be silently skipped, and skipping it inflates every "
+            f"score by counting the trivial same-camera self-match as a hit. Pass both, or "
+            f"neither if the dataset has one camera"
+        )
 
     q_cams = np.asarray(query_cameras, dtype=object) if query_cameras is not None else None
     g_cams = np.asarray(gallery_cameras, dtype=object) if gallery_cameras is not None else None
