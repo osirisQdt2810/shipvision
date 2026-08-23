@@ -13,8 +13,8 @@ import numpy as np
 import pytest
 
 from shipvision.errors import ConfigurationError
-from shipvision.tracking import TrackPool
-from shipvision.types import Detection, FrameTag, TrackState
+from shipvision.tracking import TRACKERS, TrackPool
+from shipvision.types import Detection, Detections, FrameTag, Track, TrackState
 
 BOX_W, BOX_H = 220.0, 130.0
 LANE_Y = 500.0
@@ -398,3 +398,61 @@ class TestAppearanceBlending:
 
 
 # ------------------------------------------------------------------------------ appearance
+
+
+class TestOutputIsASnapshot:
+    """A returned track must not change under its reader.
+
+    The pool mutates its `Track` objects in place every frame. While `output()` returned
+    references, a caller that consumed each frame immediately saw nothing wrong, and a caller
+    that buffered a run and read the ids afterwards got the *final* frame's state on every
+    entry. The evaluation harness hit it: one identity appeared 26 times in a single frame of
+    MOT17-09, which reads as a tracker defect and was a lifetime-of-the-object defect.
+    """
+
+    def test_a_buffered_run_keeps_each_frame_as_it_was(self) -> None:
+        tracker = TRACKERS.build("sort", min_hits=1, max_age=5)
+        buffered: list[list[Track]] = []
+        for frame in range(8):
+            detections = Detections(
+                tag=FrameTag(camera_id="cam-a", frame_id=frame),
+                items=[Detection(box=[10 + frame * 20, 30, 60 + frame * 20, 130], score=0.9)],
+            )
+            buffered.append(list(tracker.update(detections)))
+
+        published = [frames for frames in buffered if frames]
+        assert len(published) >= 4, "the scenario must actually publish something"
+
+        boxes = [frames[0].box[0] for frames in published]
+        assert len(set(boxes)) == len(boxes), (
+            f"every buffered frame reports x1={boxes[0]} — the pool's live objects were "
+            f"handed out instead of copies, so the whole run collapsed onto the last frame"
+        )
+        frame_ids = [frames[0].tag.frame_id for frames in published]
+        assert frame_ids == sorted(frame_ids)
+        assert len(set(frame_ids)) == len(frame_ids)
+
+    def test_mutating_a_returned_track_cannot_corrupt_the_pool(self) -> None:
+        """The other direction: a consumer that edits what it was given must not reach back
+        into the tracker's state."""
+        tracker = TRACKERS.build("sort", min_hits=1, max_age=5)
+        first = tracker.update(
+            Detections(
+                tag=FrameTag(camera_id="cam-a", frame_id=0),
+                items=[Detection(box=[10, 30, 60, 130], score=0.9)],
+            )
+        )
+        assert first, "the scenario must publish on the first frame"
+        stolen_id = first[0].track_id
+        first[0].track_id = -999
+        first[0].box[:] = 0.0
+
+        second = tracker.update(
+            Detections(
+                tag=FrameTag(camera_id="cam-a", frame_id=1),
+                items=[Detection(box=[12, 30, 62, 130], score=0.9)],
+            )
+        )
+
+        assert second[0].track_id == stolen_id
+        assert second[0].box[0] > 0.0

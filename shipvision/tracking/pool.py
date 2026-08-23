@@ -20,6 +20,8 @@ component stops being shared.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from collections import deque
 from collections.abc import Callable, Sequence
 
@@ -502,11 +504,23 @@ class TrackPool:
             self._tag = None
 
     def output(self) -> list[Track]:
-        """What a consumer should see: confirmed tracks seen this frame.
+        """What a consumer should see: confirmed tracks seen this frame, as **snapshots**.
 
         Tentative tracks are withheld deliberately — emitting one means publishing an
         identity for what may be a false positive, and downstream cannot tell the difference.
         LOST tracks are withheld for a stronger reason: their box is a prediction no detector
         saw, and publishing it is how a phantom object drifts across a scene.
+
+        **Copied, not aliased.** The pool mutates its `Track` objects in place every frame, so
+        returning references made the result valid only until the next `update()`. A caller
+        that consumed each frame immediately never noticed; a caller that *buffered* a run and
+        read the ids afterwards got the final frame's state on every entry. The evaluation
+        harness hit exactly that: one identity appeared 26 times in a single frame of
+        MOT17-09, which reads as a tracker bug and was a lifetime bug.
+
+        A returned value that silently changes under its reader is not an optimisation worth
+        keeping. The cost is one dataclass copy per published track — at 50 cameras x 20 fps x
+        15 objects that is ~15 000 a second, against a Kalman predict-and-project for every
+        track in the same frame, so it does not appear in a profile.
         """
-        return [t for t in self._tracks if t.is_publishable]
+        return [replace(t) for t in self._tracks if t.is_publishable]
