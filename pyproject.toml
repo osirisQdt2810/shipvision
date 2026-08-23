@@ -27,7 +27,13 @@ dependencies = ["numpy>=1.24,<3"]
 # would be slower, longer and less correct.
 solvers = ["scipy>=1.10"]
 torch = ["torch>=2.4"]
-tensorrt = ["tensorrt>=10.0", "cuda-python>=12.0"]
+# torch, not cuda-python. The TensorRT backends use torch for device buffers, streams and
+# the host-to-device copy, and TensorRT only for execution — which is ~30 lines instead of
+# several hundred, and gets the caching allocator for free. cuda-python was declared and
+# imported nowhere; the review found that `pip install shipvision[tensorrt]` therefore
+# installed something unused and omitted something required, so a correctly-installed
+# environment still raised BackendUnavailableError.
+tensorrt = ["tensorrt>=10.0", "torch>=2.4"]
 vision = ["opencv-python-headless>=4.9"]
 tune = ["optuna>=3.6", "optuna-dashboard>=0.15"]
 eval = ["scipy>=1.10", "motmetrics>=1.4"]
