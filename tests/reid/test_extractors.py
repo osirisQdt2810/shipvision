@@ -722,3 +722,110 @@ class TestTensorRTBatchAgreesWithTheEngine:
 
         assert extractor.max_batch == 32, "the profile maximum is still the ceiling"
         assert [shape[0] for shape in allocations] == [32, 32]
+
+
+def smooth_crop(seed: int, *, h: int = CROP_H, w: int = CROP_W) -> np.ndarray:
+    """A crop with no high-frequency content: a plain two-axis gradient.
+
+    Deliberately the crop a new test is most likely to write, and the one the mock cannot
+    tell apart from any other of its kind — see :class:`TestTheMockOnlySeparatesStructure`.
+    """
+    rng = np.random.default_rng(600 + seed)
+    y, x = np.mgrid[0:h, 0:w] / max(h, w)
+    plane = np.clip(rng.uniform(0.3, 1.0) * y + rng.uniform(0.3, 1.0) * x, 0.0, 1.0)
+    return np.repeat((0.1 + 0.8 * plane)[None], 3, axis=0).astype(np.float32)
+
+
+class TestTheMockRefusesCropsItsBandwidthCannotResolve:
+    """`bandwidth` is a per-pixel intensity difference, so it is only meaningful next to the
+    scale the crops are on — and getting that wrong does not degrade the mock, it *inverts*
+    it.
+
+    Measured over six objects at three jittered views each, crops in [0, 255] against the
+    default bandwidth of 0.15: two views of the same object score -0.135 to 0.073 while
+    unrelated crops reach 0.085. Margin -0.220, the wrong way round. Every appearance test
+    built on that quietly degrades to geometry-only and still passes, which is the failure
+    this guard exists to make impossible.
+    """
+
+    def test_crops_left_in_0_255_are_refused_and_told_what_to_pass(self) -> None:
+        extractor = EXTRACTORS.build("mock", dim=64)
+
+        with pytest.raises(ConfigurationError, match="bandwidth"):
+            extractor.extract(batch_of([1, 2]) * 255.0)
+
+    def test_the_matching_bandwidth_makes_the_same_crops_work(self) -> None:
+        """0.15 for [0, 1] and 38 for [0, 255] are the same configuration, and the second
+        recovers the first's numbers exactly rather than approximately."""
+        crops = batch_of([1, 1, 2], jitter=0.03)
+        unit = EXTRACTORS.build("mock", dim=256, bandwidth=0.15).extract(crops)
+        scaled = EXTRACTORS.build("mock", dim=256, bandwidth=0.15 * 255.0).extract(
+            crops * 255.0
+        )
+
+        assert np.allclose(unit, scaled, atol=1e-5)
+        within = float(cosine_similarity(scaled[:1], scaled[1:2])[0, 0])
+        across = float(cosine_similarity(scaled[:1], scaled[2:])[0, 0])
+        assert within > 0.9 > across
+
+    def test_a_constant_offset_is_not_a_scale_problem(self) -> None:
+        """The guard is on the peak-to-peak spread, not the maximum, and that is not a
+        detail: the random-Fourier construction is shift-invariant by design, so crops of
+        1000.5 +/- 0.5 behave exactly like crops of 0.5 +/- 0.5 — measured margin 0.904
+        against 0.879. A guard on `max()` would refuse them, wrongly.
+        """
+        extractor = EXTRACTORS.build("mock", dim=256)
+        crops = batch_of([1, 1, 2], jitter=0.03)
+
+        out = extractor.extract(crops + 1000.0)
+
+        within = float(cosine_similarity(out[:1], out[1:2])[0, 0])
+        across = float(cosine_similarity(out[:1], out[2:])[0, 0])
+        assert within > 0.9 > across
+
+    def test_the_default_still_suits_a_preprocessed_batch(self) -> None:
+        """[0, 1] is what a preprocessed crop is, and it must need no argument at all."""
+        assert EXTRACTORS.build("mock", dim=32).extract(batch_of([1, 2])).shape == (2, 32)
+
+    def test_a_flat_batch_has_no_spread_and_is_not_refused(self) -> None:
+        extractor = EXTRACTORS.build("mock", dim=16, channels=1)
+
+        assert extractor.extract(np.full((2, 1, 8, 8), 255.0, dtype=np.float32)).shape == (
+            2,
+            16,
+        )
+
+
+class TestTheMockOnlySeparatesStructure:
+    """The mock's contract, stated as two tests because it is routinely misread.
+
+    It reduces a crop to a block-mean thumbnail, so two crops are alike exactly to the
+    extent their thumbnails are. Crops with high-frequency content separate cleanly; smooth
+    ones do not, and no bandwidth fixes that because the information is gone before the
+    kernel sees it. Measured unrelated-pair maxima: textured 0.12, flat colour 0.84, smooth
+    gradient 0.98. A test that writes gradient crops and gates appearance at 0.8 therefore
+    matches everything against everything, and passes while measuring nothing.
+    """
+
+    def test_textured_crops_of_different_objects_land_far_apart(self) -> None:
+        out = EXTRACTORS.build("mock", dim=256).extract(batch_of(range(6)))
+
+        similarity = cosine_similarity(out, out)
+        off_diagonal = similarity[~np.eye(6, dtype=bool)]
+        assert off_diagonal.max() < 0.5
+
+    def test_smooth_crops_are_alike_by_construction_and_that_is_the_answer(self) -> None:
+        """Asserted rather than merely documented, so that the day someone "fixes" this by
+        widening the bandwidth, a test says what they actually changed."""
+        crops = np.stack([smooth_crop(s) for s in range(6)])
+        out = EXTRACTORS.build("mock", dim=256).extract(crops)
+
+        similarity = cosine_similarity(out, out)
+        off_diagonal = similarity[~np.eye(6, dtype=bool)]
+        assert off_diagonal.max() > 0.9, (
+            "two unrelated smooth gradients can have nearly the same block-mean thumbnail, "
+            "so they are alike to the mock however far apart the objects are; that is the "
+            "correct answer to the only question it can be asked, and it is why a crop "
+            "fixture needs high-frequency content. Textured crops of six different objects "
+            "stay under 0.5 in the test above — same extractor, same bandwidth"
+        )

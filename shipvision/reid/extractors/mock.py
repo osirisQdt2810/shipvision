@@ -25,12 +25,31 @@ Determinism comes from a seeded :class:`numpy.random.Generator`, not from :func:
 which is salted per process for `str` and `bytes` and would make results differ between
 runs — and a test whose expected answer depends on ``PYTHONHASHSEED`` is worse than no test.
 
-One thing to know before writing a test against it: **independent uniform noise is not two
-different crops as far as this class is concerned.** Block-averaging noise converges on the
-same flat thumbnail whatever the noise was, so two noise images genuinely are alike by the
-only measure available here, and they score around 0.9. That is the right answer to the
-question asked, but it is rarely the question a test meant to ask — give crops some
-structure and unrelated ones drop to near zero.
+**The usable regime, because outside it this class does the opposite of what it says.** Two
+things have to hold, and both are checked or asserted rather than left as advice.
+
+*Crops must be on a scale that `bandwidth` can resolve.* `bandwidth` is a per-pixel
+intensity difference, so it only means anything next to the numbers the crops actually
+carry. Crops left in [0, 255] against the default 0.15 do not degrade — they **invert**:
+measured over six objects at three jittered views each, two views of one object score -0.135
+to 0.073 while unrelated crops reach 0.085, a margin of -0.220 the wrong way round. Every
+appearance test built on that silently becomes a geometry-only test and still passes. So
+:meth:`MockExtractor.extract` refuses a batch whose peak-to-peak spread is more than 64
+bandwidths and names the value to pass instead (for [0, 255] that is 38, which reproduces
+the [0, 1] embeddings to 1e-5). Peak-to-peak rather than maximum on purpose: the random
+Fourier construction is shift-invariant, so crops of 1000.5 +/- 0.5 are as well behaved as
+crops of 0.5 +/- 0.5 — 0.904 margin against 0.879 — and a guard on `max()` would refuse them
+for no reason.
+
+*Crops must carry high-frequency structure.* A crop is reduced to a block-mean thumbnail
+before anything else happens, so whatever survives that is all this class can see. Measured
+maximum similarity between crops of six unrelated objects: textured 0.12, flat colour 0.84,
+smooth gradient 0.98. **Independent uniform noise is not two different crops** either —
+block-averaging noise converges on the same flat thumbnail whatever the noise was, and two
+noise images score around 0.9. Those are the right answers to the only question this class
+can be asked, and they are rarely the question a test meant to ask: a synthetic gradient
+crop with an appearance gate at 0.8 matches everything against everything and proves nothing
+while passing. Give crops structure and unrelated ones drop to near zero.
 """
 
 from __future__ import annotations
@@ -47,6 +66,14 @@ __all__ = ["MockExtractor"]
 #: Mixed into `seed` so that the default mock is not the same map as a caller's `seed=0`
 #: would suggest, and so two extractors built with adjacent seeds are properly independent.
 _SEED_SALT = 0x5348_4950
+
+#: How many bandwidths of peak-to-peak spread a batch may carry before it is refused. Chosen
+#: from the measured same-object-versus-unrelated margin over six objects at three views:
+#: 0.88 at a ratio of 7, 0.82 at 53, 0.78 at 64, then 0.57 at 107, 0.06 at 213 and *negative*
+#: from 255 up. Everything the measurement calls healthy is allowed and everything it calls
+#: degrading is refused, which is the useful place for the line — a mock whose ordering is
+#: merely compressed is still a mock nobody should be building an oracle on.
+_MAX_SPREAD_IN_BANDWIDTHS = 64.0
 
 
 def _reduce_axis(x: np.ndarray, axis: int, target: int) -> np.ndarray:
@@ -96,7 +123,8 @@ class MockExtractor(FeatureExtractor):
         bandwidth: the **per-pixel** intensity difference at which two crops stop looking
             alike. Per-pixel rather than per-vector so the value does not have to be
             retuned when `grid` changes. The default suits crops scaled to roughly [0, 1],
-            which is what a preprocessed batch is; raise it for crops left in [0, 255].
+            which is what a preprocessed batch is; crops left in [0, 255] need 38, and are
+            refused rather than silently inverted if they arrive without it.
         channels: how many channels a crop has. 3 is the convention at every boundary in
             this library; it is a parameter so a single-channel infrared stream can be
             mocked too.
@@ -145,6 +173,28 @@ class MockExtractor(FeatureExtractor):
         batch = self._as_batch(crops, channels=self._channels)
         if batch.shape[0] == 0:
             return self._empty()
+        self._check_scale(batch)
         summary = _thumbnail(batch, self._grid)
         features = np.cos(summary @ self._projection + self._phase)
         return normalize(features.astype(np.float32), copy=False)
+
+    def _check_scale(self, batch: np.ndarray) -> None:
+        """Refuse a batch whose spread `bandwidth` cannot resolve. See the module docstring.
+
+        Raised rather than auto-scaled. Auto-scaling would make the same crops embed
+        differently depending on what else happened to be in their batch, which is the one
+        property everything downstream of this class relies on not changing.
+        """
+        spread = float(batch.max() - batch.min())
+        limit = _MAX_SPREAD_IN_BANDWIDTHS * self.bandwidth
+        if spread > limit:
+            raise ConfigurationError(
+                f"these crops span {spread:.3g} but bandwidth is {self.bandwidth:g}, which "
+                f"resolves differences up to about {limit:.3g}. Past that the kernel has "
+                f"underflowed for every pair and the ranking is the phase noise of the "
+                f"random projection — two views of one object come out *less* alike than "
+                f"two unrelated crops, so an appearance test keeps passing while measuring "
+                f"nothing. Either scale the crops to roughly [0, 1], which is what a "
+                f"preprocessed batch is, or build this extractor with "
+                f"bandwidth={0.15 * spread:.3g}"
+            )
