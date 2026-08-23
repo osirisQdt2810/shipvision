@@ -33,8 +33,10 @@ import numpy as np
 from shipvision.errors import BackendUnavailableError, ConfigurationError
 from shipvision.imgproc.base import (
     DEFAULT_PAD_VALUE,
+    DeviceBuffer,
     ImageOps,
     as_image_batch,
+    nchw_nbytes,
     resolve_normalisation,
     validate_boxes,
     validate_image,
@@ -113,7 +115,27 @@ class TorchImageOps(ImageOps):
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
     ) -> tuple[np.ndarray, list[LetterboxGeometry]]:
-        """See :meth:`ImageOps.letterbox`."""
+        """See :meth:`ImageOps.letterbox`. The device-to-host copy is the last line."""
+        canvas, geometries = self._letterbox_tensor(
+            images, target_hw, pad_value=pad_value, mean=mean, std=std
+        )
+        return canvas.cpu().numpy(), geometries
+
+    def _letterbox_tensor(
+        self,
+        images: Sequence[np.ndarray] | np.ndarray,
+        target_hw: tuple[int, int],
+        *,
+        pad_value: int,
+        mean: Sequence[float] | None,
+        std: Sequence[float] | None,
+    ) -> tuple[torch.Tensor, list[LetterboxGeometry]]:
+        """The batch, still on this backend's device.
+
+        Split out of :meth:`letterbox` so that :meth:`letterbox_into` is the same arithmetic
+        with a different destination. Two copies of the canvas assembly would be two chances
+        for the fast path to drift from the one the parity suite checks.
+        """
         frames = as_image_batch(images)
         target_h, target_w = validate_target_hw(target_hw)
         mean_array, std_array = resolve_normalisation(mean, std)
@@ -146,7 +168,7 @@ class TorchImageOps(ImageOps):
                 geometry.pad_top : geometry.pad_top + geometry.resized_height,
                 geometry.pad_left : geometry.pad_left + geometry.resized_width,
             ] = normalised
-        return canvas.cpu().numpy(), geometries
+        return canvas, geometries
 
     def crop_batch(
         self,
@@ -157,7 +179,20 @@ class TorchImageOps(ImageOps):
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
     ) -> np.ndarray:
-        """See :meth:`ImageOps.crop_batch`."""
+        """See :meth:`ImageOps.crop_batch`. The device-to-host copy is the last line."""
+        crops = self._crop_tensor(image, boxes, target_hw, mean=mean, std=std)
+        return crops.cpu().numpy()
+
+    def _crop_tensor(
+        self,
+        image: np.ndarray,
+        boxes: np.ndarray,
+        target_hw: tuple[int, int],
+        *,
+        mean: Sequence[float] | None,
+        std: Sequence[float] | None,
+    ) -> torch.Tensor:
+        """The crops, still on this backend's device. See :meth:`_letterbox_tensor`."""
         frame = validate_image(image)
         box_array = validate_boxes(boxes)
         target_h, target_w = validate_target_hw(target_hw)
@@ -165,7 +200,9 @@ class TorchImageOps(ImageOps):
 
         count = box_array.shape[0]
         if count == 0:
-            return np.zeros((0, 3, target_h, target_w), dtype=np.float32)
+            return torch.zeros(
+                (0, 3, target_h, target_w), dtype=torch.float32, device=self._device
+            )
 
         height, width = frame.shape[:2]
         clamped = clamp_boxes_to_frame(box_array, height, width)
@@ -194,10 +231,83 @@ class TorchImageOps(ImageOps):
         if degenerate.any():
             crops[torch.from_numpy(degenerate).to(self._device)] = 0.0
 
-        normalised = (crops.flip(1) - self._as_channel_vector(mean_array)) / (
+        return (crops.flip(1) - self._as_channel_vector(mean_array)) / (
             self._as_channel_vector(std_array)
         )
-        return normalised.cpu().numpy()
+
+    # -- pre-processing, straight to the device ---------------------------------------
+
+    @property
+    def supports_device_output(self) -> bool:
+        """Only on an accelerator. A CPU tensor's pointer is host memory, and saying yes for it
+        would make "device output" mean nothing."""
+        return self._device.type == "cuda"
+
+    def letterbox_into(
+        self,
+        images: Sequence[np.ndarray] | np.ndarray,
+        target_hw: tuple[int, int],
+        out: DeviceBuffer,
+        *,
+        pad_value: int = DEFAULT_PAD_VALUE,
+        mean: Sequence[float] | None = None,
+        std: Sequence[float] | None = None,
+    ) -> list[LetterboxGeometry]:
+        """See :meth:`ImageOps.letterbox_into`.
+
+        Torch cannot build a tensor over a foreign device pointer from Python, so this writes
+        through :attr:`~shipvision.imgproc.base.DeviceBuffer.owner` — a device-to-device copy
+        inside torch, which still keeps the batch off the host. A descriptor built from a bare
+        pointer is refused rather than silently downgraded to a host round trip.
+        """
+        canvas, geometries = self._letterbox_tensor(
+            images, target_hw, pad_value=pad_value, mean=mean, std=std
+        )
+        self._write_through_owner(canvas, out, what="letterbox output")
+        return geometries
+
+    def crop_batch_into(
+        self,
+        image: np.ndarray,
+        boxes: np.ndarray,
+        target_hw: tuple[int, int],
+        out: DeviceBuffer,
+        *,
+        mean: Sequence[float] | None = None,
+        std: Sequence[float] | None = None,
+    ) -> None:
+        """See :meth:`ImageOps.crop_batch_into`."""
+        crops = self._crop_tensor(image, boxes, target_hw, mean=mean, std=std)
+        if crops.numel() == 0:
+            return
+        self._write_through_owner(crops, out, what="crop output")
+
+    def _write_through_owner(
+        self, values: torch.Tensor, out: DeviceBuffer, *, what: str
+    ) -> None:
+        """Copy ``values`` into the tensor the descriptor was built from, on the device."""
+        if not self.supports_device_output:
+            raise BackendUnavailableError(
+                f"these torch image ops are on {self.device!r}, so there is no device output "
+                f"path; build them with device='cuda:N'"
+            )
+        target = out.owner
+        if target is None or not hasattr(target, "copy_"):
+            raise BackendUnavailableError(
+                "the torch backend writes through a tensor rather than a raw address, because "
+                "torch cannot wrap a foreign device pointer from Python. Build the buffer with "
+                "DeviceBuffer.from_tensor(tensor), or use the native backend for a bare pointer"
+            )
+        out.require(
+            nchw_nbytes(values.shape[0], values.shape[2:]), self._device_ordinal(), what=what
+        )
+        target.view(-1)[: values.numel()].copy_(values.reshape(-1))
+
+    def _device_ordinal(self) -> int:
+        """``torch.device("cuda")`` carries no index; it means the current device, which is 0
+        unless something set it, and a descriptor has to be compared against a number."""
+        index = self._device.index
+        return int(torch.cuda.current_device() if index is None else index)
 
     # -- post-processing --------------------------------------------------------------
 

@@ -14,6 +14,19 @@ itself. All three backends implement exactly those.
     keep = ops.nms(boxes, scores, iou_threshold=0.45)
     boxes = geometry[0].invert_boxes(boxes[keep])    # back to source pixels
 
+A consumer that already owns the device buffer the batch should land in — an engine input
+binding, typically — asks for it instead of taking the numpy round trip. The capability is a
+question, not a backend name, so the same code works on every backend::
+
+    if ops.supports_device_output:
+        geometry = ops.letterbox_into(frames, (640, 640), DeviceBuffer.from_tensor(binding))
+    else:
+        batch, geometry = ops.letterbox(frames, (640, 640))
+
+That is worth about 5x on a batch of eight 1080p frames: the host-returning form pays a
+device-to-host copy and a stream synchronise to hand the result back to something that wanted
+it on the device.
+
 Layout::
 
     imgproc/
@@ -50,7 +63,9 @@ from shipvision.imgproc.base import (
     DEFAULT_MEAN,
     DEFAULT_PAD_VALUE,
     DEFAULT_STD,
+    DeviceBuffer,
     ImageOps,
+    nchw_nbytes,
 )
 from shipvision.imgproc.geometry import LetterboxGeometry
 from shipvision.imgproc.nms import METHODS, SOFT_METHODS, suppress
@@ -74,6 +89,7 @@ __all__ = [
     "IMGPROC",
     "METHODS",
     "SOFT_METHODS",
+    "DeviceBuffer",
     "ImageOps",
     "LetterboxGeometry",
     "NativeImageOps",
@@ -81,6 +97,7 @@ __all__ = [
     "TorchImageOps",
     "build_image_ops",
     "native_available",
+    "nchw_nbytes",
     "suppress",
 ]
 
