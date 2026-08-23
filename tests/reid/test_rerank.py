@@ -273,3 +273,53 @@ class TestRerankRefusesPoisonedInput:
         blocks[2][3, :] = np.nan
         with pytest.raises(ConfigurationError, match="non-finite"):
             rerank(*blocks, k1=6)
+
+
+class TestTheDistanceChoiceIsNotAChoice:
+    """`rerank` builds its matrix as ``1 - cos`` where Zhong et al. write the squared
+    Euclidean distance, and the difference is exactly nothing.
+
+    Every embedding in this package is L2-normalised, so ``||a - b||^2 = 2 - 2 cos``, twice
+    the value used here — and the row-maximum normalisation inside the function divides that
+    factor back out. This test exists so that the next reader who notices the discrepancy
+    can see it measured instead of taking a comment's word for it, and so that "fixing" it
+    shows up as a change with no effect rather than as a change.
+    """
+
+    def _blocks(self, seed: int, *, queries: int = 20, gallery: int = 48, dim: int = 48):
+        rng = np.random.default_rng(seed)
+        centres = normalize(rng.normal(size=(10, dim)).astype(np.float32))
+        gallery_rows = normalize(
+            np.stack(
+                [centres[i % 10] + 0.35 * rng.normal(size=dim) for i in range(gallery)]
+            ).astype(np.float32)
+        )
+        query_rows = normalize(
+            np.stack(
+                [centres[i % 10] + 0.35 * rng.normal(size=dim) for i in range(queries)]
+            ).astype(np.float32)
+        )
+        return (
+            cosine_similarity(query_rows, gallery_rows),
+            cosine_similarity(query_rows, query_rows),
+            cosine_similarity(gallery_rows, gallery_rows),
+        )
+
+    @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+    def test_the_two_distances_produce_the_same_re_ranking(self, seed: int) -> None:
+        """``2 * sim - 1`` is the similarity whose ``1 - sim`` is the squared Euclidean
+        distance, so passing it makes the function compute the paper's form verbatim."""
+        qg, qq, gg = self._blocks(seed)
+
+        as_cosine = rerank(qg, qq, gg, k1=10, k2=3)
+        as_squared_euclidean = rerank(
+            2.0 * qg - 1.0, 2.0 * qq - 1.0, 2.0 * gg - 1.0, k1=10, k2=3
+        )
+
+        assert np.allclose(as_cosine, as_squared_euclidean, atol=1e-6)
+        ids = [f"id-{i % 10}" for i in range(48)]
+        queries = [f"id-{i % 10}" for i in range(20)]
+        cosine_result = evaluate_ranking(-as_cosine, queries, ids)
+        euclidean_result = evaluate_ranking(-as_squared_euclidean, queries, ids)
+        assert cosine_result.mean_ap == pytest.approx(euclidean_result.mean_ap, abs=1e-9)
+        assert cosine_result.rank(1) == euclidean_result.rank(1)
