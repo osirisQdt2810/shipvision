@@ -68,6 +68,7 @@ __version__ = "0.1.0"
 #: waiting to fail a user.
 _REGISTRY_HOMES: dict[str, str] = {
     "IMGPROC": "shipvision.imgproc",
+    "DETECTORS": "shipvision.detection",
     "EXTRACTORS": "shipvision.reid",
     "GALLERIES": "shipvision.reid",
     "AGGREGATORS": "shipvision.reid",
@@ -105,6 +106,7 @@ __all__ = [
     "AGGREGATORS",
     "CAMERA_MOTION",
     "CLUSTERERS",
+    "DETECTORS",
     "EXTRACTORS",
     "GALLERIES",
     "IMGPROC",
