@@ -381,17 +381,17 @@ namespace {
         // One transfer, not one per frame: eight 6 MB copies cost eight driver round
         // trips and eight chances to serialise the stream.
         shipvision::check(gpuMemcpyAsync(device, pinned, total, gpuMemcpyHostToDevice, stream),
-                         "upload frames");
+                          "upload frames");
 
         auto* device_views =
             static_cast<ImageView*>(slot.views().reserve(views_.size() * sizeof(ImageView)));
         shipvision::check(gpuMemcpyAsync(device_views, views_.data(),
-                                        views_.size() * sizeof(ImageView),
-                                        gpuMemcpyHostToDevice, stream),
-                         "upload image views");
+                                         views_.size() * sizeof(ImageView),
+                                         gpuMemcpyHostToDevice, stream),
+                          "upload image views");
 
         shipvision::letterbox_batch(device_views, static_cast<int>(plans.size()), out, dst_h,
-                                   dst_w, params, pad_value, stream);
+                                    dst_w, params, pad_value, stream);
         // Not a synchronise: it marks when this slot's buffers stop being read, so the
         // rotation can reuse them without anybody waiting here.
         slot.record(stream);
@@ -418,12 +418,12 @@ namespace {
 
         auto* device = static_cast<unsigned char*>(slot.frames().reserve(packed));
         shipvision::check(gpuMemcpyAsync(device, pinned, packed, gpuMemcpyHostToDevice, stream),
-                         "upload frame and boxes");
+                          "upload frame and boxes");
 
         const ImageView view{device, plan.height, plan.width,  1.f,
                              0,      0,           plan.height, plan.width};
         shipvision::crop_batch(view, reinterpret_cast<const float*>(device + box_offset),
-                              plan.num_boxes, out, dst_h, dst_w, params, stream);
+                               plan.num_boxes, out, dst_h, dst_w, params, stream);
         slot.record(stream);
       }
 
@@ -442,7 +442,7 @@ namespace {
             nms_mask_.reserve(mask_words * sizeof(unsigned long long)));
 
         return shipvision::nms(boxes, scores, n, iou_threshold, score_threshold, max_output,
-                              scratch, stream);
+                               scratch, stream);
       }
 
       /// Device to host, through pinned memory.
@@ -463,7 +463,7 @@ namespace {
       }
 
       int device_index_;
-      StagingRing ring_;                ///< rotated per call, so reuse never races a live copy
+      StagingRing ring_;                 ///< rotated per call, so reuse never races a live copy
       shipvision::DeviceScratch output_; ///< host-returning entry points only
       shipvision::DeviceScratch nms_boxes_; ///< score-sorted boxes for one NMS call
       shipvision::DeviceScratch nms_mask_;  ///< the (box, box) overlap bitmask

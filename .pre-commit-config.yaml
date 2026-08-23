@@ -49,8 +49,12 @@ repos:
       - id: black
         args: [--line-length, "96"]
 
+  # Pinned to the version the project actually develops against. A hook older than the local
+  # ruff rejects rule selectors that do not exist yet — `UP045` was split out of `UP007` in a
+  # later release, and an unknown selector in `ignore` is a hard parse error, not a warning.
+  # So the pin is not cosmetic: a stale one fails the lint job on a valid config.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.10
+    rev: v0.16.4
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
