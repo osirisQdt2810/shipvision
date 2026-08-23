@@ -25,8 +25,8 @@ while ``build("bytetrack", backend="python")`` pins it.
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar
 from collections.abc import Callable, Iterable
+from typing import Generic, TypeVar
 
 from shipvision.errors import ConfigurationError
 
@@ -147,7 +147,16 @@ class Registry(Generic[T]):
         key = (resolved, chosen)
         entry = self._entries.get(key)
         if entry is None:
-            entry = self._entries[key] = _import_target(self._lazy[key])
+            entry = _import_target(self._lazy[key])
+            # Stamp the same attributes `register` stamps. The decorator cannot have done it
+            # — the class did not exist yet — and without this a lazily-registered class
+            # reports whatever `name`/`backend` it happens to inherit, so a log line says
+            # "python" for a TensorRT extractor. Doing it here rather than asking each lazy
+            # class to declare them keeps the two registration paths indistinguishable to
+            # everything downstream.
+            entry.name = resolved  # type: ignore[attr-defined]
+            entry.backend = chosen  # type: ignore[attr-defined]
+            self._entries[key] = entry
         return entry
 
     def build(self, name: str, *, backend: str | None = None, **kwargs: object) -> T:

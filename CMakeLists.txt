@@ -122,7 +122,19 @@ endif()
 
 # Install straight into the package tree so an editable install picks it up with no
 # PYTHONPATH games: `import shipvision` must work immediately after a build.
-set(SHIPVISION_PACKAGE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/python/shipvision")
+#
+# The package sits at the repository ROOT (`shipvision/`), not under a `python/` prefix.
+# Asserted rather than assumed: when the layout moved, this path was left behind, the
+# POST_BUILD copy failed at 100% — and because a failed POST_BUILD makes the target dirty,
+# make then DELETED the freshly-linked module. A clean checkout could not produce a working
+# `.so` at all, and the error scrolled past under a "[100%] Built target" line.
+set(SHIPVISION_PACKAGE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shipvision")
+if(NOT EXISTS "${SHIPVISION_PACKAGE_DIR}/__init__.py")
+  message(FATAL_ERROR
+    "Expected the Python package at ${SHIPVISION_PACKAGE_DIR} but found no __init__.py. "
+    "If the layout moved, update SHIPVISION_PACKAGE_DIR — do not let the POST_BUILD copy "
+    "fail silently.")
+endif()
 add_custom_command(TARGET _C POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:_C> "${SHIPVISION_PACKAGE_DIR}/"
-  COMMENT "Installing $<TARGET_FILE_NAME:_C> into python/shipvision/")
+  COMMENT "Installing $<TARGET_FILE_NAME:_C> into shipvision/")
