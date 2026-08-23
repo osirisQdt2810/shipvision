@@ -159,6 +159,57 @@ class TestDetections:
         assert len(dets) == 3, "filter returns a new object rather than mutating"
 
 
+class TestNonFiniteInput:
+    """A NaN or inf must be refused at the boundary, never carried.
+
+    This is not defensive tidiness. The adversarial review of the re-identification package
+    measured what one poisoned row does: a single NaN gallery vector out of sixty made every
+    entry of a re-ranked score matrix NaN, and the evaluation then reported **mAP 0.2236
+    against the true 0.1196** — better than reality — because `argsort` on an all-NaN row
+    falls back to array order. A failure that flatters the measurement is the worst kind to
+    let through, so it is stopped where the value enters.
+    """
+
+    @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+    def test_a_non_finite_box_is_refused(self, bad: float) -> None:
+        with pytest.raises(ConfigurationError, match="non-finite"):
+            Detection(box=[0.0, 0.0, bad, 1.0])
+
+    @pytest.mark.parametrize("bad", [np.nan, np.inf])
+    def test_a_non_finite_detection_embedding_is_refused(self, bad: float) -> None:
+        with pytest.raises(ConfigurationError, match="non-finite"):
+            Detection(box=[0, 0, 1, 1], embedding=np.array([1.0, bad, 3.0], np.float32))
+
+    @pytest.mark.parametrize("bad", [np.nan, np.inf])
+    def test_a_non_finite_embedding_is_refused(self, bad: float) -> None:
+        with pytest.raises(ConfigurationError, match="non-finite"):
+            Embedding(vector=np.array([1.0, 2.0, bad], np.float32))
+
+    def test_the_error_says_how_many_and_where(self) -> None:
+        """One bad crop in tens of thousands is the usual cause, so knowing it was one value
+        of 512 rather than the whole batch is the difference between a bug hunt and a
+        dropped frame."""
+        vector = np.ones(512, np.float32)
+        vector[7] = np.nan
+        vector[300] = np.inf
+
+        with pytest.raises(ConfigurationError, match=r"2 non-finite value\(s\).*index 7"):
+            Embedding(vector=vector)
+
+    def test_a_non_finite_track_box_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError):
+            Track(track_id=1, box=[0.0, 0.0, np.nan, 1.0], tag=TAG)
+
+    def test_finite_input_is_untouched(self) -> None:
+        """The guard must not cost the ordinary path anything or change a value."""
+        detection = Detection(
+            box=[1.5, 2.5, 3.5, 4.5], embedding=np.arange(4, dtype=np.float32)
+        )
+
+        assert detection.box.tolist() == [1.5, 2.5, 3.5, 4.5]
+        assert detection.embedding.tolist() == [0.0, 1.0, 2.0, 3.0]
+
+
 class TestEmbedding:
     """One appearance vector plus the context needed to judge it."""
 

@@ -23,6 +23,13 @@ detection somewhere it never happened.
 **Embeddings are stored L2-normalised.** Normalising once on the way in, rather than inside
 every distance function, is the difference between a similarity search costing one gemm and
 costing a gemm plus a full pass over the gallery.
+
+**Nothing non-finite gets in.** A NaN or an inf is refused at construction rather than
+carried, because it does not stay local: `np.maximum(norm, eps)` propagates NaN, any
+reduction over a matrix containing one poisons every row, and `argsort` on an all-NaN row
+falls back to array order — which means a ranking metric computed over poisoned scores comes
+back *higher* than the true one. An fp16 engine emitting an inf is the ordinary way this
+happens, and a failure that flatters the measurement is the worst kind to allow through.
 """
 
 from __future__ import annotations
@@ -50,6 +57,23 @@ __all__ = [
     "xyxy_to_cxcyah",
     "xyxy_to_cxcywh",
 ]
+
+
+def _reject_non_finite(array: np.ndarray, what: str) -> None:
+    """Refuse NaN and inf at the boundary, naming how many and where.
+
+    Reported rather than merely refused because the usual cause is one bad crop out of tens
+    of thousands, and knowing it was one row of 512 rather than the whole batch is the
+    difference between a bug hunt and a dropped frame.
+    """
+    bad = ~np.isfinite(array)
+    if bad.any():
+        first = int(np.flatnonzero(bad.reshape(-1))[0])
+        raise ConfigurationError(
+            f"{what} has {int(bad.sum())} non-finite value(s), the first at index {first}. "
+            f"A NaN does not stay local: it propagates through every reduction, and a "
+            f"ranking computed over poisoned scores comes back better than the truth"
+        )
 
 
 # --------------------------------------------------------------------------- identity
@@ -135,6 +159,12 @@ class Detection:
         self.box = np.asarray(self.box, dtype=np.float32).reshape(-1)
         if self.box.shape[0] != 4:
             raise ConfigurationError(f"box must be xyxy with 4 values, got {self.box.shape}")
+        if not np.all(np.isfinite(self.box)):
+            raise ConfigurationError(
+                f"box contains a non-finite value: {self.box.tolist()}. A NaN box compares "
+                f"false against every threshold, so it is silently never matched rather than "
+                f"reported"
+            )
         if self.box[2] < self.box[0] or self.box[3] < self.box[1]:
             raise ConfigurationError(
                 f"box is inside-out: {self.box.tolist()}. xyxy means (x1, y1, x2, y2) with "
@@ -144,6 +174,7 @@ class Detection:
             raise ConfigurationError(f"score must be in [0, 1], got {self.score}")
         if self.embedding is not None:
             self.embedding = np.asarray(self.embedding, dtype=np.float32).reshape(-1)
+            _reject_non_finite(self.embedding, "embedding")
 
     @property
     def width(self) -> float:
@@ -252,6 +283,7 @@ class Embedding:
         self.vector = np.asarray(self.vector, dtype=np.float32).reshape(-1)
         if self.vector.size == 0:
             raise ConfigurationError("an embedding cannot be empty")
+        _reject_non_finite(self.vector, "embedding")
         if not 0.0 <= self.quality <= 1.0:
             raise ConfigurationError(f"quality must be in [0, 1], got {self.quality}")
 
@@ -303,6 +335,10 @@ class Track:
         self.box = np.asarray(self.box, dtype=np.float32).reshape(-1)
         if self.box.shape[0] != 4:
             raise ConfigurationError(f"box must be xyxy with 4 values, got {self.box.shape}")
+        # A Kalman filter that has diverged produces a NaN state, and a track carrying one
+        # would be published to MTMC, where it lands in a distance matrix and poisons the
+        # clustering for every camera at that instant — not just its own.
+        _reject_non_finite(self.box, "track box")
         if self.state not in TrackState.ALL:
             raise ConfigurationError(f"unknown state {self.state!r}; expected {TrackState.ALL}")
 
