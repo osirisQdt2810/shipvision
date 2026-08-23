@@ -115,6 +115,14 @@ class TrackSequence:
         flattening it here rather than asking the caller to keep the nesting means a caller
         that batches or reorders its publication still produces the right sequence. The frame
         number comes from the track's own tag, which is the whole reason the tag travels.
+
+        **The tracks must be distinct objects.**
+        :meth:`~shipvision.tracking.base.BaseTracker.update` returns the pool's live
+        :class:`~shipvision.types.Track` instances and mutates them on the next frame, so
+        accumulating them across a run and calling this afterwards reads the *last* frame's id
+        and box for every entry. :func:`shipvision.eval.runner.run` snapshots per frame for
+        that reason; this constructor is for a caller that already has one list per frame or
+        is reading a file.
         """
         grouped: dict[int, tuple[list[int], list[np.ndarray]]] = {}
         for track in tracks:
@@ -179,6 +187,10 @@ class EvaluationCase:
             A prediction that matches one is *removed* before scoring rather than counted as
             a false positive, because the object is really there and the benchmark simply
             declines to ask about it. Empty for a synthetic case.
+        unscored: boxes that are annotated but neither scored nor absorbing — occluders,
+            crowd regions, vehicles. They exist so that a distractor box cannot absorb a
+            prediction that plainly belongs to one of them instead; see
+            :func:`shipvision.eval.association.drop_predictions_matching`.
         height: frame height in pixels, passed through to the trackers that need it.
         width: frame width in pixels.
     """
@@ -187,6 +199,7 @@ class EvaluationCase:
     detections: tuple[Detections, ...]
     ground_truth: TrackSequence
     ignored: tuple[ObjectFrame, ...] = ()
+    unscored: tuple[ObjectFrame, ...] = ()
     height: int = 0
     width: int = 0
     metadata: dict[str, object] = field(default_factory=dict)
@@ -194,6 +207,7 @@ class EvaluationCase:
     def __post_init__(self) -> None:
         object.__setattr__(self, "detections", tuple(self.detections))
         object.__setattr__(self, "ignored", tuple(self.ignored))
+        object.__setattr__(self, "unscored", tuple(self.unscored))
         cameras = {d.tag.camera_id for d in self.detections}
         if len(cameras) > 1:
             raise ConfigurationError(
@@ -232,6 +246,7 @@ class EvaluationCase:
                 length=len(kept),
             ),
             ignored=tuple(f for f in self.ignored if f.frame_id <= last),
+            unscored=tuple(f for f in self.unscored if f.frame_id <= last),
             height=self.height,
             width=self.width,
             metadata=dict(self.metadata),

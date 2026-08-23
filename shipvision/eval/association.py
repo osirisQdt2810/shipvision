@@ -143,9 +143,20 @@ def drop_predictions_matching(
     predictions: ObjectFrame,
     ignored: ObjectFrame,
     *,
+    competing: np.ndarray | None = None,
     threshold: float = 0.5,
 ) -> ObjectFrame:
     """Remove the predictions that landed on a box the benchmark declines to ask about.
+
+    Args:
+        predictions: this frame's tracker output.
+        ignored: the boxes that *absorb* a prediction — MOTChallenge's distractor classes:
+            people on vehicles, static persons, distractors and reflections.
+        competing: ``(m, 4)`` boxes that take part in the assignment but neither score nor
+            absorb: the scored ground truth itself, plus the annotation classes that are
+            neither pedestrians nor distractors (occluders, crowd regions, vehicles).
+            Optional, and omitting it biases the result — see below.
+        threshold: IoU at which a prediction counts as landing on a box.
 
     MOTChallenge's ground truth contains reflections, people sitting in vehicles and static
     mannequins. They are real objects, a good detector finds them, and the benchmark scores
@@ -153,17 +164,33 @@ def drop_predictions_matching(
     not counted as a false positive. Skipping this step is worth several MOTA points and
     every one of them is a lie about the detector rather than about the tracker.
 
-    The matching is one-to-one at ``threshold``, so a single ignore region cannot absorb an
-    unlimited number of duplicate predictions.
+    **``competing`` is what makes the deletion conservative.** The assignment is solved over
+    every annotated box in the frame at once and only the predictions assigned to an
+    *ignored* row are dropped. Solve over the ignored boxes alone and a prediction sitting on
+    a real pedestrian who happens to stand in front of a reflection gets deleted — removing a
+    true positive from the tracker that found it while leaving the ground-truth box in the
+    denominator. One frame of that is noise; over 1050 frames of MOT17-04 it is a systematic
+    penalty on whichever tracker keeps the most tracks alive. MOTChallenge's own protocol does
+    the joint solve, which is also what makes these numbers comparable with a leaderboard's.
+
+    The matching is one-to-one, so a single ignore region cannot absorb an unlimited number
+    of duplicate predictions — a tracker that emits ten boxes on one mannequin has nine false
+    positives, which is the honest count.
     """
     if len(predictions) == 0 or len(ignored) == 0:
         return predictions
-    similarity = iou_similarity(ignored.boxes, predictions.boxes)
-    _, cols = solve_maximum(np.where(similarity >= threshold - EPS, similarity, 0.0))
-    if cols.size == 0:
+    if competing is None or len(competing) == 0:
+        boxes, offset = ignored.boxes, 0
+    else:
+        others = np.asarray(competing, dtype=np.float32).reshape(-1, 4)
+        boxes, offset = np.concatenate([others, ignored.boxes]), others.shape[0]
+    similarity = iou_similarity(boxes, predictions.boxes)
+    rows, cols = solve_maximum(np.where(similarity >= threshold - EPS, similarity, 0.0))
+    drop = cols[rows >= offset]
+    if drop.size == 0:
         return predictions
     keep = np.ones(len(predictions), dtype=bool)
-    keep[cols] = False
+    keep[drop] = False
     return ObjectFrame(
         frame_id=predictions.frame_id,
         ids=predictions.ids[keep],
@@ -233,6 +260,7 @@ def align(
     predictions: TrackSequence,
     *,
     ignored: Sequence[ObjectFrame] = (),
+    unscored: Sequence[ObjectFrame] = (),
     ignore_threshold: float = 0.5,
     name: str | None = None,
 ) -> AlignedSequence:
@@ -241,9 +269,12 @@ def align(
     Args:
         ground_truth: the answer.
         predictions: what the tracker said.
-        ignored: per-frame boxes the benchmark declines to score. Predictions matched to one
-            are removed here, before any metric sees them — see
-            :func:`drop_predictions_matching`.
+        ignored: per-frame boxes that absorb a prediction. A prediction matched to one is
+            removed here, before any metric sees it — see :func:`drop_predictions_matching`.
+        unscored: per-frame boxes that are annotated but are neither scored nor absorbing —
+            occluders, crowd regions, vehicles. They exist only to compete for predictions in
+            the ignore assignment, so that a distractor cannot absorb a prediction which
+            plainly belongs to an occluder instead.
         ignore_threshold: IoU at which a prediction counts as landing on an ignored box.
         name: what to call the result. Defaults to the ground truth's name.
 
@@ -260,6 +291,7 @@ def align(
     gt_by_frame = ground_truth.by_frame()
     pred_by_frame = predictions.by_frame()
     ignored_by_frame = {f.frame_id: f for f in ignored}
+    unscored_by_frame = {f.frame_id: f for f in unscored}
     empty = ObjectFrame(frame_id=-1, ids=np.empty(0, dtype=np.int64), boxes=np.empty((0, 4)))
 
     paired: list[tuple[int, ObjectFrame, ObjectFrame]] = []
@@ -267,9 +299,15 @@ def align(
         gt_frame = gt_by_frame.get(frame_id, empty)
         pred_frame = pred_by_frame.get(frame_id, empty)
         ignore_frame = ignored_by_frame.get(frame_id)
-        if ignore_frame is not None:
+        if ignore_frame is not None and len(pred_frame):
+            other = unscored_by_frame.get(frame_id)
+            competing = (
+                gt_frame.boxes
+                if other is None
+                else np.concatenate([gt_frame.boxes, other.boxes])
+            )
             pred_frame = drop_predictions_matching(
-                pred_frame, ignore_frame, threshold=ignore_threshold
+                pred_frame, ignore_frame, competing=competing, threshold=ignore_threshold
             )
         if len(gt_frame) == 0 and len(pred_frame) == 0:
             # Nothing to match either way. Not stored, but still counted in num_frames: a

@@ -110,9 +110,7 @@ class SequenceResult:
         """One named score. Raises rather than defaulting on an unknown name."""
         scores = self.scores()
         if metric not in scores:
-            raise ConfigurationError(
-                f"unknown metric {metric!r}; available: {sorted(scores)}"
-            )
+            raise ConfigurationError(f"unknown metric {metric!r}; available: {sorted(scores)}")
         return scores[metric]
 
     def renamed(self, name: str) -> SequenceResult:
