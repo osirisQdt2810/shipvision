@@ -264,3 +264,62 @@ def test_centroid_capacity_evicts_the_least_recently_seen() -> None:
     assert len(gallery) == 3
     assert "ship-1" not in gallery.identities, "least recently observed, not first enrolled"
     assert "ship-0" in gallery.identities
+
+
+class TestCentroidRowIndicesMeanSomething:
+    """``add`` returns a row, and it is the same number ``query`` reports for that identity.
+
+    It returned ``len(self._vectors) - 1`` once — the size of the gallery minus one, which
+    is the same value for every identity added while the gallery is full and indexes nothing
+    at all. A caller cannot tell a meaningless handle from a meaningful one by looking at it,
+    so the contract has to be asserted.
+    """
+
+    def test_add_returns_the_row_that_query_reports_for_the_same_identity(self) -> None:
+        gallery = GALLERIES.build("centroid", capacity=8)
+        rows = {
+            f"ship-{i}": gallery.add(
+                Embedding(vector=view_of(i), identity=f"ship-{i}", camera_id="cam-a")
+            )
+            for i in range(5)
+        }
+
+        for identity, row in rows.items():
+            seed = int(identity.split("-")[1])
+            match = gallery.query(view_of(seed, view=3)).best
+            assert match is not None and match.identity == identity
+            assert match.entry_index == row
+
+    def test_folding_more_views_into_an_identity_keeps_its_row(self) -> None:
+        gallery = GALLERIES.build("centroid")
+        first = gallery.add(Embedding(vector=view_of(1), identity="ship-1"))
+
+        again = [
+            gallery.add(Embedding(vector=view_of(1, view=v), identity="ship-1"))
+            for v in range(1, 4)
+        ]
+
+        assert again == [first, first, first]
+        assert len(gallery) == 1
+
+    def test_distinct_identities_never_share_a_row(self) -> None:
+        gallery = GALLERIES.build("centroid", capacity=32)
+        rows = [
+            gallery.add(Embedding(vector=view_of(i), identity=f"ship-{i}")) for i in range(20)
+        ]
+
+        assert sorted(rows) == list(range(20)), "one row each, densely packed"
+
+    def test_a_row_freed_by_eviction_is_handed_to_the_next_identity(self) -> None:
+        """The rows stay dense, which is the whole reason the search is one gemm: a hole in
+        the middle would either have to be masked on every query or force a reallocation."""
+        gallery = GALLERIES.build("centroid", capacity=4)
+        for i in range(4):
+            gallery.add(Embedding(vector=view_of(i), identity=f"ship-{i}"))
+
+        row = gallery.add(Embedding(vector=view_of(9), identity="ship-9"))
+
+        assert len(gallery) == 4
+        assert 0 <= row < 4
+        assert "ship-0" not in gallery.identities
+        assert gallery.query(view_of(9, view=1)).best.entry_index == row
