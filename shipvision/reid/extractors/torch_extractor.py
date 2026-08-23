@@ -35,7 +35,6 @@ from shipvision.errors import (
     InferenceError,
     ModelLoadError,
 )
-from shipvision.registry import TORCH
 from shipvision.reid.base import FeatureExtractor
 from shipvision.reid.distance import normalize
 
@@ -78,13 +77,6 @@ class TorchExtractor(FeatureExtractor):
             mantissa bits do not survive into the ranking anyway.
         channels: channels per crop, 3 by every convention in this library.
     """
-
-    # Declared here rather than left to the registry: Registry.register_lazy claims the
-    # (name, backend) pair without importing the class, so unlike @register it has nothing
-    # to stamp these on. Stating them keeps `repr` and any log line honest about which
-    # entry produced the instance.
-    name: str = "generic"
-    backend: str = TORCH
 
     def __init__(
         self,

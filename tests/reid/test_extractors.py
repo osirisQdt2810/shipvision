@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import types
 
 import numpy as np
 import pytest
@@ -521,3 +522,201 @@ def test_a_missing_runtime_is_a_typed_error_not_an_import_error(
 
     with pytest.raises(BackendUnavailableError, match=absent):
         EXTRACTORS.build("generic", backend=backend, path=tmp_path / "absent.engine", **extra)
+
+
+# ------------------------------------------------- the TensorRT engine's own batch size
+
+
+class StubEngine:
+    """A serialised engine's shape metadata, with nothing behind it.
+
+    Enough of the TensorRT surface for the constructor's shape arithmetic to run on a
+    machine with no GPU. `batch` is the plan's baked row count when `dynamic` is False —
+    the case that matters, because a fixed-batch plan reads and writes exactly that many
+    rows however few the caller asked for.
+    """
+
+    num_io_tensors = 2
+
+    def __init__(self, *, batch: int, dynamic: bool, dim: int = 512) -> None:
+        self.batch = batch
+        self.dynamic = dynamic
+        self.dim = dim
+        self.set_input_shape_calls: list[tuple] = []
+
+    def get_tensor_name(self, i: int) -> str:
+        return ["images", "embeddings"][i]
+
+    def get_tensor_mode(self, name: str):
+        import tensorrt as trt
+
+        return trt.TensorIOMode.INPUT if name == "images" else trt.TensorIOMode.OUTPUT
+
+    def get_tensor_shape(self, name: str) -> tuple[int, ...]:
+        rows = -1 if self.dynamic else self.batch
+        return (rows, 3, 256, 128) if name == "images" else (rows, self.dim)
+
+    def get_tensor_profile_shape(self, name: str, index: int):
+        one = (1, 3, 256, 128)
+        return one, one, (self.batch, 3, 256, 128)
+
+    def get_tensor_dtype(self, name: str):
+        import tensorrt as trt
+
+        return trt.DataType.FLOAT
+
+    def create_execution_context(self):
+        return StubContext(self)
+
+
+class StubContext:
+    def __init__(self, engine: StubEngine) -> None:
+        self._engine = engine
+
+    def set_input_shape(self, name: str, shape: tuple) -> bool:
+        self._engine.set_input_shape_calls.append(shape)
+        return True
+
+    def set_tensor_address(self, name: str, pointer: int) -> None:
+        return None
+
+    def execute_async_v3(self, stream: int) -> bool:
+        return True
+
+
+def _stub_tensorrt(engine: StubEngine):
+    module = types.ModuleType("tensorrt")
+    module.TensorIOMode = types.SimpleNamespace(INPUT="input", OUTPUT="output")
+    module.DataType = types.SimpleNamespace(FLOAT="float32", HALF="float16")
+    module.Logger = type("Logger", (), {"WARNING": 1, "__init__": lambda self, *a: None})
+    module.init_libnvinfer_plugins = lambda *a: None
+    module.Runtime = type(
+        "Runtime",
+        (),
+        {
+            "__init__": lambda self, *a: None,
+            "deserialize_cuda_engine": lambda self, blob: engine,
+        },
+    )
+    return module
+
+
+def _stub_torch(allocations: list[tuple[int, ...]]):
+    """Just enough torch to record what the constructor would allocate on the device."""
+
+    class Tensor:
+        def __init__(self, shape: tuple[int, ...]) -> None:
+            self.shape = tuple(shape)
+
+        def __getitem__(self, key):
+            return self
+
+        def copy_(self, *a, **k):
+            return self
+
+        def data_ptr(self) -> int:
+            return 0xDEAD
+
+        def float(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return np.zeros((self.shape[0], self.shape[1]), dtype=np.float32)
+
+    class Nothing:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def empty(shape, dtype=None, device=None):
+        allocations.append(tuple(shape))
+        return Tensor(shape)
+
+    module = types.ModuleType("torch")
+    module.float32 = "float32"
+    module.float16 = "float16"
+    module.empty = empty
+    module.from_numpy = lambda array: Tensor(array.shape)
+    module.cuda = types.SimpleNamespace(
+        is_available=lambda: True,
+        device=lambda ordinal: Nothing(),
+        stream=lambda stream: Nothing(),
+        Stream=type("Stream", (), {"cuda_stream": 1, "synchronize": lambda self: None}),
+    )
+    return module
+
+
+class TestTensorRTBatchAgreesWithTheEngine:
+    """`max_batch` is a promise about how many rows the plan will run, not a slice size.
+
+    A fixed-batch engine reads and writes its baked row count whatever the caller asked
+    for, so buffers sized to a smaller `max_batch` are read and written out of bounds —
+    a silent corruption of whatever the caching allocator handed out next, or a sticky
+    illegal access that poisons the context for the life of the process. There is nothing
+    to clamp: the number is the engine's, and a caller who needs a different one has a
+    configuration problem.
+    """
+
+    def _build(self, monkeypatch, *, batch: int, dynamic: bool, max_batch, tmp_path):
+        from shipvision.reid.extractors.tensorrt_extractor import TensorRTExtractor
+
+        engine = StubEngine(batch=batch, dynamic=dynamic)
+        allocations: list[tuple[int, ...]] = []
+        monkeypatch.setitem(sys.modules, "tensorrt", _stub_tensorrt(engine))
+        monkeypatch.setitem(sys.modules, "torch", _stub_torch(allocations))
+        path = tmp_path / "stub.engine"
+        path.write_bytes(b"not really an engine")
+        extractor = TensorRTExtractor(path=path, device=0, max_batch=max_batch)
+        return extractor, engine, allocations
+
+    def test_a_smaller_max_batch_on_a_fixed_engine_is_refused(self, monkeypatch, tmp_path):
+        with pytest.raises(ConfigurationError, match="32") as raised:
+            self._build(monkeypatch, batch=32, dynamic=False, max_batch=8, tmp_path=tmp_path)
+
+        assert "8" in str(raised.value), "the message must name both numbers"
+
+    def test_a_larger_max_batch_on_a_fixed_engine_is_refused_too(self, monkeypatch, tmp_path):
+        """Not honourable in the other direction either: the plan still runs 32."""
+        with pytest.raises(ConfigurationError, match="fixed"):
+            self._build(monkeypatch, batch=32, dynamic=False, max_batch=64, tmp_path=tmp_path)
+
+    def test_a_fixed_engine_allocates_exactly_its_baked_row_count(self, monkeypatch, tmp_path):
+        extractor, engine, allocations = self._build(
+            monkeypatch, batch=32, dynamic=False, max_batch=None, tmp_path=tmp_path
+        )
+
+        assert extractor.max_batch == 32
+        assert [shape[0] for shape in allocations] == [32, 32]
+        extractor.extract(np.zeros((8, 3, 256, 128), np.float32))
+        assert engine.set_input_shape_calls == [], "a fixed plan cannot be told a row count"
+
+    def test_a_matching_max_batch_on_a_fixed_engine_is_accepted(self, monkeypatch, tmp_path):
+        extractor, _, allocations = self._build(
+            monkeypatch, batch=32, dynamic=False, max_batch=32, tmp_path=tmp_path
+        )
+
+        assert extractor.max_batch == 32
+        assert [shape[0] for shape in allocations] == [32, 32]
+
+    def test_a_dynamic_engine_still_clamps_because_it_can_honour_it(self, monkeypatch, tmp_path):
+        extractor, engine, allocations = self._build(
+            monkeypatch, batch=32, dynamic=True, max_batch=8, tmp_path=tmp_path
+        )
+
+        assert extractor.max_batch == 8
+        assert [shape[0] for shape in allocations] == [8, 8]
+        extractor.extract(np.zeros((8, 3, 256, 128), np.float32))
+        assert engine.set_input_shape_calls == [(8, 3, 256, 128)], "told the real count"
+
+    def test_a_dynamic_engine_cannot_be_pushed_past_its_profile(self, monkeypatch, tmp_path):
+        extractor, _, allocations = self._build(
+            monkeypatch, batch=32, dynamic=True, max_batch=64, tmp_path=tmp_path
+        )
+
+        assert extractor.max_batch == 32, "the profile maximum is still the ceiling"
+        assert [shape[0] for shape in allocations] == [32, 32]

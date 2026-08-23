@@ -34,7 +34,6 @@ from shipvision.errors import (
     InferenceError,
     ModelLoadError,
 )
-from shipvision.registry import TENSORRT
 from shipvision.reid.base import FeatureExtractor
 from shipvision.reid.distance import normalize
 
@@ -70,20 +69,15 @@ class TensorRTExtractor(FeatureExtractor):
         device: CUDA device ordinal. Explicit and per-instance because the whole reason
             ShipInfer exists is that its predecessor never called ``cudaSetDevice`` and ran
             sixteen GPUs' worth of work on GPU 0.
-        max_batch: cap on crops per execution, clamped down to what the engine's profile
-            allows. `None` uses the engine's maximum.
+        max_batch: cap on crops per execution. `None` uses the engine's maximum, which is
+            always the safe answer. A value is clamped down to the profile maximum on a
+            **dynamic** engine and refused outright on a fixed-batch one, where it cannot
+            be honoured in either direction — see :meth:`_resolve_max_batch`.
 
     Attributes:
         input_size: ``(height, width)`` read from the input binding — what crops must be
             resized to, so the caller does not have to be told separately.
     """
-
-    # Declared here rather than left to the registry: Registry.register_lazy claims the
-    # (name, backend) pair without importing the class, so unlike @register it has nothing
-    # to stamp these on. Stating them keeps `repr` and any log line honest about which
-    # entry produced the instance.
-    name: str = "generic"
-    backend: str = TENSORRT
 
     def __init__(
         self,
@@ -139,7 +133,7 @@ class TensorRTExtractor(FeatureExtractor):
             self._dynamic_batch,
         ) = self._read_input_binding()
         self._dim = self._read_output_binding()
-        self.max_batch = engine_batch if max_batch is None else min(max_batch, engine_batch)
+        self.max_batch = self._resolve_max_batch(max_batch, engine_batch)
 
         with torch.cuda.device(self.device):
             self._stream = torch.cuda.Stream()
@@ -210,6 +204,38 @@ class TensorRTExtractor(FeatureExtractor):
         if dynamic:
             batch = self._profile_max()[0]
         return int(channels), (int(height), int(width)), int(batch), dynamic
+
+    def _resolve_max_batch(self, requested: int | None, engine_batch: int) -> int:
+        """How many rows a batch may hold, given what the engine will actually run.
+
+        The buffers below are allocated at this number and the engine writes into them, so
+        it has to be the row count the plan runs — not merely a cap on what the caller
+        submits. On a **dynamic** engine those are the same thing: the context is told the
+        real count per execution, so clamping to the profile maximum is safe. On a
+        **fixed-batch** engine they are not. The plan's row count is baked in and
+        ``set_input_shape`` is correctly skipped, so a smaller ``max_batch`` would leave
+        the engine reading and writing past the end of both buffers — a silent corruption
+        of whatever the caching allocator handed out next, or a sticky illegal access that
+        poisons the context for the life of the process.
+
+        So a fixed-batch engine refuses any ``max_batch`` but its own. Quietly running 32
+        rows for a caller who asked for 8 is the other wrong answer: they sized something
+        against that number too.
+        """
+        if requested is None:
+            return engine_batch
+        if self._dynamic_batch:
+            return min(requested, engine_batch)
+        if requested != engine_batch:
+            raise ConfigurationError(
+                f"{self.path} has a fixed batch of {engine_batch} rows baked into its plan "
+                f"and max_batch={requested} was asked for. A fixed-batch plan runs "
+                f"{engine_batch} rows whatever it is handed, so device buffers sized for "
+                f"{requested} would be read and written out of bounds. Pass "
+                f"max_batch={engine_batch}, leave it as None, or rebuild the engine with a "
+                f"dynamic batch axis and an optimisation profile"
+            )
+        return engine_batch
 
     def _profile_max(self) -> tuple[int, int, int, int]:
         """The engine's optimisation-profile maximum, for whatever it left dynamic."""

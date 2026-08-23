@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import re
+import tracemalloc
+
 import numpy as np
 import pytest
 
 from shipvision.errors import ConfigurationError
 from shipvision.reid import cosine_similarity, evaluate_ranking, normalize, rerank
+from shipvision.reid.rerank import _peak_estimate
 from tests.reid.conftest import view_of
 
 
@@ -165,3 +169,107 @@ def test_nonsense_parameters_are_refused() -> None:
         rerank(*blocks, k1=0)
     with pytest.raises(ConfigurationError, match="k1=99"):
         rerank(*blocks, k1=99)
+
+
+class TestRerankMemoryGuardIsHonest:
+    """The guard must estimate the peak, not the size of one matrix.
+
+    `test_it_refuses_a_matrix_it_would_have_to_allocate_blind` passes 30 000, which is over
+    any plausible threshold and therefore cannot detect that the threshold is wrong. These
+    pin the *estimate* against a measured peak at a size small enough to run, so the
+    estimate and the allocations cannot drift apart in silence.
+    """
+
+    def _blocks(self, total: int, dim: int = 16):
+        n_query = total // 10
+        rng = np.random.default_rng(0)
+        query = normalize(rng.normal(size=(n_query, dim)).astype(np.float32))
+        gallery = normalize(rng.normal(size=(total - n_query, dim)).astype(np.float32))
+        return (
+            cosine_similarity(query, gallery),
+            cosine_similarity(query, query),
+            cosine_similarity(gallery, gallery),
+        )
+
+    @pytest.mark.parametrize("total", [1200, 2000])
+    @pytest.mark.parametrize("k2", [1, 6])
+    def test_the_estimate_matches_a_measured_peak(self, total: int, k2: int) -> None:
+        qg, qq, gg = self._blocks(total)
+        estimate = sum(_peak_estimate(qg.shape[0], qg.shape[1], k2).values())
+
+        tracemalloc.start()
+        try:
+            rerank(qg, qq, gg, k1=20, k2=k2)
+            _, measured = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        ratio = measured / estimate
+        assert 0.7 <= ratio <= 1.3, (
+            f"the guard claims {estimate / 1e6:.1f} MB at total={total} k2={k2} and the "
+            f"function peaked at {measured / 1e6:.1f} MB ({ratio:.2f}x)"
+        )
+
+    def test_the_refusal_names_the_peak_and_where_it_goes(self) -> None:
+        with pytest.raises(ConfigurationError) as raised:
+            rerank(
+                np.zeros((10, 30_000), np.float32),
+                np.zeros((10, 10), np.float32),
+                np.zeros((30_000, 30_000), np.float32),
+            )
+
+        message = str(raised.value)
+        assert "int32" in message, "the breakdown has to say where the memory goes"
+
+        # The property that matters is the reported TOTAL, not the absence of a substring.
+        # One 30 010^2 float32 matrix is 3.6 GB, and the breakdown legitimately names several
+        # parts of exactly that size — so forbidding the string "3.6 GB" would reject a
+        # correct message. Parse the headline figure and require it to be several matrices.
+        one_matrix_gb = 30_010 * 30_010 * 4 / 1e9
+        reported = float(re.search(r"peaks at about ([\d.]+) GB", message).group(1))
+
+        assert reported > 3 * one_matrix_gb, (
+            f"the guard reports {reported:.1f} GB, which is only {reported / one_matrix_gb:.1f} "
+            f"matrices — the function holds at least four live at once, and under-reporting "
+            f"is the exact defect this test exists for"
+        )
+
+    def test_int32_ranks_are_wide_enough_for_anything_the_guard_permits(self) -> None:
+        """int32 is the whole first half of the fix, so the bound is worth stating."""
+        assert 20_000 < np.iinfo(np.int32).max
+
+
+class TestRerankRefusesPoisonedInput:
+    """One NaN gallery row makes `original.max(axis=1)` NaN for that row, and `argsort` on
+    an all-NaN row falls back to array order — so a metric computed downstream comes back
+    *higher* than the truth. Refusing is the only safe answer."""
+
+    def _finite_blocks(self, identities: int = 6):
+        gallery, _ = build_set(identities, 3, 0.3)
+        query, _ = build_set(identities, 1, 0.3)
+        return (
+            cosine_similarity(query, gallery),
+            cosine_similarity(query, query),
+            cosine_similarity(gallery, gallery),
+        )
+
+    @pytest.mark.parametrize("block", [0, 1, 2])
+    @pytest.mark.parametrize("bad", [np.nan, np.inf])
+    def test_a_non_finite_entry_in_any_block_is_refused(self, block: int, bad: float) -> None:
+        blocks = list(self._finite_blocks())
+        blocks[block] = blocks[block].copy()
+        blocks[block][0, 0] = bad
+
+        with pytest.raises(ConfigurationError, match="non-finite"):
+            rerank(*blocks, k1=6)
+
+    def test_one_poisoned_row_would_otherwise_flatter_the_measurement(self) -> None:
+        """The measurement that motivates the guard, kept as evidence rather than a claim."""
+        blocks = list(self._finite_blocks())
+        clean = rerank(*blocks, k1=6)
+        assert np.all(np.isfinite(clean)), "the clean case must still work"
+
+        blocks[2] = blocks[2].copy()
+        blocks[2][3, :] = np.nan
+        with pytest.raises(ConfigurationError, match="non-finite"):
+            rerank(*blocks, k1=6)
