@@ -11,13 +11,18 @@ every query against a gallery that is already normalised — the rule is the one
 :mod:`shipvision.types`: vectors are normalised once, on the way in, and everything
 downstream assumes it. :func:`normalize` is that gate, and :func:`is_normalized` is how a
 test or an assertion checks it held.
+
+Being the gate makes it the place a non-finite value has to be stopped. It is the last
+common point before a vector becomes part of every future score, and it is reached by arrays
+that never passed through :class:`shipvision.types.Embedding` — an extractor's output, an
+aggregator's running sum, a raw query probe.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from shipvision.errors import DimensionMismatchError
+from shipvision.errors import ConfigurationError, DimensionMismatchError
 
 __all__ = [
     "cosine_distance",
@@ -34,6 +39,26 @@ __all__ = [
 _MIN_NORM = 1e-12
 
 
+def _require_finite(array: np.ndarray) -> None:
+    """Refuse NaN and inf, naming how many and where.
+
+    Reported rather than merely refused because the usual cause is one bad crop out of tens
+    of thousands, and knowing it was one value rather than the whole batch is the difference
+    between a bug hunt and a dropped frame.
+    """
+    bad = ~np.isfinite(array)
+    if bad.any():
+        first = int(np.flatnonzero(bad.reshape(-1))[0])
+        raise ConfigurationError(
+            f"cannot normalise a vector with {int(bad.sum())} non-finite value(s), the "
+            f"first at flat index {first}. Normalisation is where such a value stops being "
+            f"local: the norm of a row containing NaN is NaN, dividing by it returns a row "
+            f"of NaN that looks unit-length to every later check, and NaN scores compare "
+            f"False against any threshold — so the entry is neither accepted nor rejected, "
+            f"it just poisons every reduction that touches it"
+        )
+
+
 def normalize(x: np.ndarray, *, copy: bool = True) -> np.ndarray:
     """L2-normalise the rows of ``x``.
 
@@ -42,15 +67,24 @@ def normalize(x: np.ndarray, *, copy: bool = True) -> np.ndarray:
         copy: False normalises in place when the array is already float and writeable,
             which matters when the caller is normalising a whole gallery at load time.
 
-    A zero row stays zero rather than becoming NaN. NaN is the worse failure by far: it
-    propagates through the similarity matrix into every score, so one bad crop out of
-    50 000 turns the entire query into NaN and the ranking silently becomes arbitrary.
+    Raises:
+        ConfigurationError: if any value is NaN or infinite. This is the gate rather than a
+            place to be tolerant, for the reason below.
+
+    A zero row stays zero rather than becoming NaN — a vector that says nothing is a
+    legitimate answer, and it scores 0 against everything, which is the honest reply. A
+    non-finite value is a different thing entirely and is refused: it propagates through the
+    similarity matrix into every score, so one bad crop out of 50 000 turns the entire query
+    into NaN, and ``argsort`` on an all-NaN row falls back to array order — a ranking that is
+    arbitrary while looking ordinary. The one pass of :func:`numpy.isfinite` this costs is
+    tens of microseconds on a batch of 15 000 crops.
     """
     array = np.asarray(x)
     if not np.issubdtype(array.dtype, np.floating):
         array = array.astype(np.float32)
     elif copy:
         array = array.copy()
+    _require_finite(array)
 
     norms = np.linalg.norm(array, axis=-1, keepdims=True)
     np.divide(array, np.maximum(norms, _MIN_NORM), out=array)

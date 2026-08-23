@@ -157,8 +157,10 @@ class CentroidGallery(BaseGallery):
             )
         with self._lock:
             self._ensure_dim(embedding.dim)
-            # Interned before anything is written: a camera id the codec refuses must not
-            # leave a half-populated row behind.
+            # Both of these can refuse the embedding, and both run before anything is
+            # written or evicted: a rejected add must leave the gallery exactly as it was.
+            # Normalising is also where a non-finite vector is stopped.
+            vector = normalize(embedding.vector)
             code = self._cameras.code_for(embedding.camera_id)
             assert self._centroids is not None
 
@@ -176,9 +178,7 @@ class CentroidGallery(BaseGallery):
             if folder is None:
                 folder = self._make_aggregator()
                 self._aggregators[identity] = folder
-            self._centroids[row] = folder.update(
-                known, normalize(embedding.vector), weight=embedding.quality
-            )
+            self._centroids[row] = folder.update(known, vector, weight=embedding.quality)
             self._camera_code[row] = code
             self._has_frame[row] = embedding.frame_id is not None
             self._frame[row] = embedding.frame_id or 0

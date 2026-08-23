@@ -111,11 +111,14 @@ class FlatGallery(BaseGallery):
             )
         with self._lock:
             self._ensure_dim(embedding.dim)
+            # Normalised first because normalising is also where a non-finite vector is
+            # refused, and a refusal must not leave an eviction behind it.
+            vector = normalize(embedding.vector)
             self._make_room(embedding.identity)
 
             index = self._size
             assert self._vectors is not None
-            self._vectors[index] = normalize(embedding.vector)
+            self._vectors[index] = vector
             self._identity.append(embedding.identity)
             self._camera_code[index] = self._code_for(embedding.camera_id)
             self._has_frame[index] = embedding.frame_id is not None

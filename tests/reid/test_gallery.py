@@ -6,7 +6,7 @@ import pytest
 from shipvision import Embedding
 from shipvision.errors import ConfigurationError, DimensionMismatchError
 from shipvision.reid import GALLERIES
-from tests.reid.conftest import view_of
+from tests.reid.conftest import DIM, view_of
 
 GALLERY_NAMES = GALLERIES.names()
 
@@ -323,3 +323,43 @@ class TestCentroidRowIndicesMeanSomething:
         assert 0 <= row < 4
         assert "ship-0" not in gallery.identities
         assert gallery.query(view_of(9, view=1)).best.entry_index == row
+
+
+class TestAGalleryRefusesNonFiniteVectors:
+    """``Embedding`` validates on the way in, but it is a mutable dataclass and a gallery is
+    the last boundary before a value becomes part of every future score.
+
+    A NaN does not stay in the row it arrived in: it is a unit-looking vector after
+    normalisation, it scores NaN against every probe, and a threshold comparison against NaN
+    is False — so the entry is never accepted and never rejected either, it just quietly
+    corrupts whatever reduction touches it.
+    """
+
+    @pytest.mark.parametrize("name", GALLERY_NAMES)
+    @pytest.mark.parametrize("bad", [np.nan, np.inf])
+    def test_add_refuses_a_vector_that_bypassed_the_embedding_check(
+        self, name: str, bad: float
+    ) -> None:
+        gallery = GALLERIES.build(name)
+        smuggled = Embedding(vector=view_of(1), identity="ship-1", camera_id="cam-a")
+        smuggled.vector = np.full(DIM, bad, dtype=np.float32)
+
+        with pytest.raises(ConfigurationError, match="non-finite"):
+            gallery.add(smuggled)
+        assert len(gallery) == 0, "and nothing half-written is left behind"
+
+    @pytest.mark.parametrize("name", GALLERY_NAMES)
+    def test_a_non_finite_probe_is_refused_rather_than_accepted_with_a_nan_score(
+        self, name: str
+    ) -> None:
+        """With ``threshold=None`` the best match is accepted unconditionally, so a NaN
+        probe used to come back as an accepted identity with a NaN score and a truthy
+        result — the worst available outcome, since the caller then assigns that identity.
+        """
+        gallery = GALLERIES.build(name)
+        enrol(gallery, 1)
+        probe = view_of(1, view=4)
+        probe[3] = np.nan
+
+        with pytest.raises(ConfigurationError, match="non-finite"):
+            gallery.query(probe)

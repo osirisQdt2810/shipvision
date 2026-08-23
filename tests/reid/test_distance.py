@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from shipvision.errors import DimensionMismatchError
+from shipvision.errors import ConfigurationError, DimensionMismatchError
 from shipvision.reid import (
     cosine_distance,
     cosine_similarity,
@@ -95,3 +95,46 @@ def test_euclidean_and_cosine_rank_identically_on_unit_vectors() -> None:
 def test_mismatched_widths_are_a_typed_error_not_a_broadcast() -> None:
     with pytest.raises(DimensionMismatchError, match="same model"):
         cosine_similarity(np.zeros((1, 128), np.float32), np.zeros((4, 512), np.float32))
+
+
+class TestNormalizeRefusesWhatItCannotNormalise:
+    """The second line of defence behind :class:`shipvision.types.Embedding`.
+
+    ``Embedding`` refuses a non-finite vector at construction, but it is a mutable dataclass
+    and plenty of arrays reach :func:`normalize` without ever having been one — an extractor
+    output, an aggregator's running sum, a raw query probe. And ``normalize`` is the one
+    place that *cannot* pass the problem on quietly: ``np.maximum(norm, 1e-12)`` propagates
+    NaN, so a single bad value comes out as a unit-looking vector of NaNs, scores NaN
+    against the whole gallery, and ``argsort`` on an all-NaN row falls back to array order.
+    The ranking is then arbitrary and nothing anywhere reports an error.
+    """
+
+    @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+    def test_a_single_bad_value_is_refused_rather_than_propagated(self, bad: float) -> None:
+        x = np.ones((3, 8), dtype=np.float32)
+        x[1, 5] = bad
+
+        with pytest.raises(ConfigurationError, match="non-finite"):
+            normalize(x)
+
+    def test_the_message_says_how_many_and_where(self) -> None:
+        """One bad crop in 50 000 and the whole batch are the same symptom and different
+        problems; the operator needs to know which one they have."""
+        x = np.ones(16, dtype=np.float32)
+        x[9] = np.nan
+
+        with pytest.raises(ConfigurationError, match="1 non-finite"):
+            normalize(x)
+
+    def test_it_is_refused_in_place_too(self) -> None:
+        """``copy=False`` is the load-time path over a whole gallery — the one place a bad
+        row would be written back into storage."""
+        x = np.full((2, 4), np.inf, dtype=np.float32)
+
+        with pytest.raises(ConfigurationError):
+            normalize(x, copy=False)
+
+    def test_a_zero_row_is_still_fine(self) -> None:
+        """Zero is not the same failure: it says nothing, which is a legitimate answer, and
+        it stays zero rather than becoming NaN."""
+        assert not np.isnan(normalize(np.zeros((1, 8), dtype=np.float32))).any()
