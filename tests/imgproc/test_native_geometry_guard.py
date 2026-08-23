@@ -25,9 +25,8 @@ import numpy as np
 import pytest
 
 from shipvision.errors import InferenceError
-from shipvision.imgproc.backends import native_ops
 from shipvision.imgproc.geometry import LetterboxGeometry
-from tests.imgproc.conftest import NATIVE_BUILT
+from tests.imgproc.conftest import NATIVE_BUILT, FakeExtension, build_native
 
 DRIFT_SOURCE = (7, 200)
 """7 rows at scale 0.5 is 3.5 rows, which rounds half up to 4 — the boundary case."""
@@ -36,70 +35,16 @@ DRIFT_TARGET = (100, 100)
 """100 - 4 is even, so ``r`` and ``r - 1`` pad identically and the old guard saw nothing."""
 
 
-class FakeExtension:
-    """Stands in for ``shipvision._C``, reporting whatever geometry a test wants.
-
-    A fake rather than a mock of the whole call: the point is to drive the *translator* — the
-    Python side that plans the geometry and compares — with a plausible answer from the other
-    side of the binding, which is exactly what a drifting build would produce.
-    """
-
-    def __init__(self, *, scale_delta=0.0, pad_delta=0, extent_delta=0) -> None:
-        self.scale_delta = scale_delta
-        self.pad_delta = pad_delta
-        self.extent_delta = extent_delta
-        self.calls = 0
-
-    def ImageOps(self, *, device_index: int):  # mirrors the extension's own name
-        self.device_index = device_index
-        return self
-
-    def scratch_bytes(self) -> dict[str, int]:
-        return {"staging_ring": 0, "output": 0, "nms": 0}
-
-    def letterbox_batch(self, images, dst_h, dst_w, mean, std, swap_rb, pad_value, stream):
-        self.calls += 1
-        tensor = np.zeros((len(images), 3, dst_h, dst_w), dtype=np.float32)
-        return (tensor, *self._geometry(images, dst_h, dst_w))
-
-    def letterbox_into(
-        self, images, out_ptr, out_bytes, dst_h, dst_w, mean, std, swap_rb, pad_value, stream
-    ):
-        self.calls += 1
-        return self._geometry(images, dst_h, dst_w)
-
-    def _geometry(self, images, dst_h, dst_w):
-        """The truth, plus whatever drift the test asked for."""
-        scales = np.zeros(len(images), dtype=np.float32)
-        pads = np.zeros((len(images), 2), dtype=np.float32)
-        extents = np.zeros((len(images), 2), dtype=np.int32)
-        for index, image in enumerate(images):
-            plan = LetterboxGeometry.plan(image.shape[:2], (dst_h, dst_w))
-            scales[index] = plan.scale + self.scale_delta
-            pads[index] = (plan.pad_left + self.pad_delta, plan.pad_top + self.pad_delta)
-            extents[index] = (
-                plan.resized_height + self.extent_delta,
-                plan.resized_width,
-            )
-        return scales, pads, extents
-
-
 @pytest.fixture()
 def frame() -> np.ndarray:
     return np.zeros((*DRIFT_SOURCE, 3), dtype=np.uint8)
-
-
-def build(monkeypatch, fake: FakeExtension) -> native_ops.NativeImageOps:
-    """A native backend whose extension is the fake. No device involved."""
-    monkeypatch.setattr(native_ops, "_C", fake)
-    return native_ops.NativeImageOps(device_index=0)
 
 
 class TestTheGuardComparesTheResizedExtent:
     """A one-pixel drift in ``out_h`` must be a loud failure, not a silent resample."""
 
     def test_a_drifted_extent_is_refused(self, monkeypatch, frame) -> None:
-        ops = build(monkeypatch, FakeExtension(extent_delta=-1))
+        ops = build_native(monkeypatch, FakeExtension(extent_delta=-1))
 
         with pytest.raises(InferenceError, match="resized extent"):
             ops.letterbox(frame, DRIFT_TARGET)
@@ -127,7 +72,7 @@ class TestTheGuardComparesTheResizedExtent:
         """``letterbox_into`` is the production path, so it cannot be the unguarded one."""
         from shipvision.imgproc.base import DeviceBuffer
 
-        ops = build(monkeypatch, FakeExtension(extent_delta=1))
+        ops = build_native(monkeypatch, FakeExtension(extent_delta=1))
         buffer = DeviceBuffer(pointer=0x1000, nbytes=1 << 24, device_index=0)
 
         with pytest.raises(InferenceError, match="resized extent"):
@@ -136,7 +81,7 @@ class TestTheGuardComparesTheResizedExtent:
     def test_an_agreeing_extension_is_accepted(self, monkeypatch, frame) -> None:
         """The guard must not be a tripwire on the ordinary case."""
         fake = FakeExtension()
-        ops = build(monkeypatch, fake)
+        ops = build_native(monkeypatch, fake)
 
         batch, geometries = ops.letterbox(frame, DRIFT_TARGET)
 
@@ -149,13 +94,13 @@ class TestTheOlderChecksAreStillThere:
     """Adding a comparison must not remove the two that were already right."""
 
     def test_a_drifted_scale_is_refused(self, monkeypatch, frame) -> None:
-        ops = build(monkeypatch, FakeExtension(scale_delta=0.01))
+        ops = build_native(monkeypatch, FakeExtension(scale_delta=0.01))
 
         with pytest.raises(InferenceError, match="scale"):
             ops.letterbox(frame, DRIFT_TARGET)
 
     def test_a_drifted_pad_is_refused(self, monkeypatch, frame) -> None:
-        ops = build(monkeypatch, FakeExtension(pad_delta=1))
+        ops = build_native(monkeypatch, FakeExtension(pad_delta=1))
 
         with pytest.raises(InferenceError, match="pad"):
             ops.letterbox(frame, DRIFT_TARGET)
@@ -163,7 +108,7 @@ class TestTheOlderChecksAreStillThere:
     def test_the_message_names_the_image(self, monkeypatch) -> None:
         """A ragged batch of fifty cameras needs to say *which* one, because the answer is
         almost always one resolution rather than the build."""
-        ops = build(monkeypatch, FakeExtension(extent_delta=-1))
+        ops = build_native(monkeypatch, FakeExtension(extent_delta=-1))
         frames = [np.zeros((16, 16, 3), dtype=np.uint8), np.zeros((*DRIFT_SOURCE, 3), np.uint8)]
 
         with pytest.raises(InferenceError, match="image 0"):

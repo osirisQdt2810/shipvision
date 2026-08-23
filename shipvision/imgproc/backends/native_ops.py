@@ -29,6 +29,7 @@ every call site.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
 
 import numpy as np
@@ -87,6 +88,19 @@ class NativeImageOps(ImageOps):
     One instance owns one device index and one staging ring, so it belongs to one worker
     thread for the life of the process. Sharing it between threads races the ring, and the
     result is plausible-looking output from the wrong frame — see ``csrc/core/buffers.hpp``.
+
+    That last sentence used to be the whole enforcement. It is now checked: the first thread
+    to *use* an instance claims it, and a call from any other raises
+    :class:`~shipvision.errors.InferenceError`. Measured before the check, two threads sharing
+    one instance over 300 frames each either returned the other camera's pixels — 11 and 242
+    frames of 300 in the review that found this — or, on the box this was fixed on, failed every
+    call with a sticky ``GpuError`` that ends the process. Both are unacceptable and neither is
+    attributable after the fact: a mis-tagged detection looks exactly like a real one.
+
+    Ownership is claimed on first use rather than in ``__init__`` on purpose. The ring is only
+    touched by a call, so first use is when the invariant starts to matter, and claiming at
+    construction would refuse the ordinary pattern of assembling a pipeline on one thread and
+    running it on a worker — a false failure on every frame, in exchange for nothing.
     """
 
     def __init__(self, *, device_index: int = 0, stream: int = 0) -> None:
@@ -116,11 +130,40 @@ class NativeImageOps(ImageOps):
             ) from exc
         self._device_index = device_index
         self._stream = int(stream)
+        self._owner_thread: int | None = None
+        self._owner_name = ""
+        self._claim_lock = threading.Lock()
 
     @property
     def device_index(self) -> int:
         """The GPU this instance is bound to, for the life of the instance."""
         return self._device_index
+
+    def _claim_thread(self) -> None:
+        """Bind this instance to the calling thread, or refuse a foreign caller.
+
+        Raises:
+            InferenceError: another thread already owns this instance. Not
+                :class:`~shipvision.errors.ConfigurationError`, because it is not the
+                configuration that is wrong — the work reached the wrong object at run time,
+                and the frame has to be dropped rather than the process taken down.
+        """
+        current = threading.get_ident()
+        if self._owner_thread is None:
+            with self._claim_lock:
+                if self._owner_thread is None:
+                    self._owner_thread = current
+                    self._owner_name = threading.current_thread().name
+                    return
+        if self._owner_thread != current:
+            raise InferenceError(
+                f"these native image ops belong to thread {self._owner_name!r} and were called "
+                f"from {threading.current_thread().name!r}. One instance serves one thread for "
+                f"the life of the process: the staging ring is per-instance, so two threads "
+                f"sharing it either race a live DMA — a sticky illegal access that ends the "
+                f"worker — or return the previous camera's pixels with no error at all. Build "
+                f"one instance per worker thread; construction is cheap"
+            )
 
     def scratch_bytes(self) -> dict[str, int]:
         """Persistent device and pinned-host scratch this instance holds, in bytes.
@@ -143,6 +186,7 @@ class NativeImageOps(ImageOps):
         std: Sequence[float] | None = None,
     ) -> tuple[np.ndarray, list[LetterboxGeometry]]:
         """See :meth:`ImageOps.letterbox`."""
+        self._claim_thread()
         frames = as_image_batch(images)
         target_h, target_w = validate_target_hw(target_hw)
         mean_array, std_array = resolve_normalisation(mean, std)
@@ -173,6 +217,7 @@ class NativeImageOps(ImageOps):
         std: Sequence[float] | None = None,
     ) -> np.ndarray:
         """See :meth:`ImageOps.crop_batch`."""
+        self._claim_thread()
         frame = validate_image(image)
         box_array = validate_boxes(boxes)
         target_h, target_w = validate_target_hw(target_hw)
@@ -215,6 +260,7 @@ class NativeImageOps(ImageOps):
     ) -> list[LetterboxGeometry]:
         """See :meth:`ImageOps.letterbox_into`. 8.6 ms where :meth:`letterbox` costs 44.7 ms
         for a batch of eight 1080p frames into 640x640 on this box."""
+        self._claim_thread()
         frames = as_image_batch(images)
         target_h, target_w = validate_target_hw(target_hw)
         mean_array, std_array = resolve_normalisation(mean, std)
@@ -249,6 +295,7 @@ class NativeImageOps(ImageOps):
         std: Sequence[float] | None = None,
     ) -> None:
         """See :meth:`ImageOps.crop_batch_into`."""
+        self._claim_thread()
         frame = validate_image(image)
         box_array = validate_boxes(boxes)
         target_h, target_w = validate_target_hw(target_hw)
@@ -297,6 +344,7 @@ class NativeImageOps(ImageOps):
         Those methods run the shared numpy implementation, so every backend gives the same
         answer for them.
         """
+        self._claim_thread()
         if method != CLASSIC:
             return suppress(
                 boxes,
