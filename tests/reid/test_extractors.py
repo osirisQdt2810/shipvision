@@ -703,7 +703,9 @@ class TestTensorRTBatchAgreesWithTheEngine:
         assert extractor.max_batch == 32
         assert [shape[0] for shape in allocations] == [32, 32]
 
-    def test_a_dynamic_engine_still_clamps_because_it_can_honour_it(self, monkeypatch, tmp_path):
+    def test_a_dynamic_engine_still_clamps_because_it_can_honour_it(
+        self, monkeypatch, tmp_path
+    ):
         extractor, engine, allocations = self._build(
             monkeypatch, batch=32, dynamic=True, max_batch=8, tmp_path=tmp_path
         )

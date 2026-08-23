@@ -46,7 +46,7 @@ import numpy as np
 
 from shipvision.detection.base import (
     DETECTORS,
-    DetectionFailure,
+    DetectionError,
     Detector,
     frame_hw,
 )
@@ -103,7 +103,7 @@ class MockDetector(Detector):
         size_range: ``(low, high)`` box height as a fraction of the frame height. Width
             follows from ``aspect``.
         aspect: box width divided by height.
-        fail_every: raise :class:`~shipvision.detection.base.DetectionFailure` on frames whose
+        fail_every: raise :class:`~shipvision.detection.base.DetectionError` on frames whose
             ``frame_id`` is a multiple of this. `None` never fails. Keyed on the frame id
             rather than on a call counter so that which frames fail is a property of the
             input and not of how the batches happened to be cut — a test can name the frames
@@ -173,7 +173,7 @@ class MockDetector(Detector):
         tag = frame.tag
         height, width = frame_hw(frame)
         if self.fail_every is not None and tag.frame_id % self.fail_every == 0:
-            raise DetectionFailure(
+            raise DetectionError(
                 f"mock detector configured to fail every {self.fail_every} frames", tag=tag
             )
 

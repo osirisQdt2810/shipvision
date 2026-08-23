@@ -11,7 +11,7 @@ import pytest
 import shipvision.detection as detection
 from shipvision.detection import (
     DETECTORS,
-    DetectionFailure,
+    DetectionError,
     Detector,
     empty_detections,
     frame_hw,
@@ -49,7 +49,9 @@ class TestDetectorContract:
                 return [Detections(tag=f.tag) for f in frames]
 
         detector = Counting()
-        result = detector.detect_one(Frame(FrameTag("cam-01", 3), image=None, height=8, width=8))
+        result = detector.detect_one(
+            Frame(FrameTag("cam-01", 3), image=None, height=8, width=8)
+        )
 
         assert result.tag == FrameTag("cam-01", 3)
         assert Counting.calls == 1
@@ -62,18 +64,18 @@ class TestDetectorContract:
         )
 
 
-class TestDetectionFailure:
+class TestDetectionError:
     """The tag survives the error path, and existing handlers still catch it."""
 
     def test_it_is_an_inference_error_and_a_shipvision_error(self) -> None:
-        assert issubclass(DetectionFailure, InferenceError)
-        assert issubclass(DetectionFailure, ShipVisionError)
+        assert issubclass(DetectionError, InferenceError)
+        assert issubclass(DetectionError, ShipVisionError)
 
     def test_it_carries_the_tag_as_an_attribute_not_only_in_the_message(self) -> None:
         """A server that must attribute a gap to a camera cannot parse a message to do it."""
         tag = FrameTag("cam-22", 91)
 
-        failure = DetectionFailure("the engine returned an error", tag=tag)
+        failure = DetectionError("the engine returned an error", tag=tag)
 
         assert failure.tag is tag
         assert "cam-22#91" in str(failure)
@@ -81,7 +83,7 @@ class TestDetectionFailure:
     def test_an_unattributable_failure_has_no_tag_and_says_nothing_about_one(self) -> None:
         """An engine-wide fault is not one frame's fault, and inventing a tag for it would put a
         real-looking failure on a camera that was fine."""
-        failure = DetectionFailure("the device fell off the bus")
+        failure = DetectionError("the device fell off the bus")
 
         assert failure.tag is None
         assert str(failure) == "the device fell off the bus"
@@ -91,7 +93,10 @@ class TestFrameAccessors:
     """Where a frame's coordinate space comes from, and what happens when it is missing."""
 
     def test_the_declared_extent_wins_when_there_are_no_pixels(self) -> None:
-        assert frame_hw(Frame(FrameTag("c", 0), image=None, height=720, width=1280)) == (720, 1280)
+        assert frame_hw(Frame(FrameTag("c", 0), image=None, height=720, width=1280)) == (
+            720,
+            1280,
+        )
 
     def test_the_pixels_are_used_when_nothing_is_declared(self) -> None:
         image = np.zeros((480, 640, 3), dtype=np.uint8)

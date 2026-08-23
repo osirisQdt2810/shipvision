@@ -39,7 +39,7 @@ from shipvision.types import Detections, Frame, FrameTag
 
 __all__ = [
     "DETECTORS",
-    "DetectionFailure",
+    "DetectionError",
     "Detector",
     "empty_detections",
     "frame_hw",
@@ -47,7 +47,7 @@ __all__ = [
 ]
 
 
-class DetectionFailure(InferenceError):
+class DetectionError(InferenceError):
     """A detection failed, and it says *which frame* it failed on.
 
     A subclass rather than a bare :class:`~shipvision.errors.InferenceError` because the tag
@@ -105,7 +105,7 @@ class Detector(abc.ABC):
             ``len(frames)`` results, boxes in **original image pixels**, xyxy float32.
 
         Raises:
-            DetectionFailure: the model ran and failed. The frame it failed on is on the
+            DetectionError: the model ran and failed. The frame it failed on is on the
                 exception.
             ConfigurationError: a frame this implementation cannot read (no pixels and no
                 declared extent).
@@ -159,7 +159,11 @@ def frame_hw(frame: Frame) -> tuple[int, int]:
     """
     declared = (int(frame.height), int(frame.width))
     array = frame.image if isinstance(frame.image, np.ndarray) else None
-    actual = (int(array.shape[0]), int(array.shape[1])) if array is not None and array.ndim >= 2 else None
+    actual = (
+        (int(array.shape[0]), int(array.shape[1]))
+        if array is not None and array.ndim >= 2
+        else None
+    )
 
     if declared[0] > 0 and declared[1] > 0:
         if actual is not None and actual != declared:

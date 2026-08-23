@@ -36,7 +36,7 @@ from typing import Any
 import numpy as np
 
 from shipvision.detection.artefact import ArtefactDetector
-from shipvision.detection.base import DetectionFailure
+from shipvision.detection.base import DetectionError
 from shipvision.detection.heads import resolve_head
 from shipvision.errors import (
     BackendUnavailableError,
@@ -195,10 +195,8 @@ class TorchDetector(ArtefactDetector):
             with torch.no_grad():
                 output = self._module(tensor)
         except Exception as exc:
-            raise DetectionFailure(
+            raise DetectionError(
                 f"{self.path} failed on a batch of {batch.shape[0]}: {exc}",
                 tag=tags[0] if tags else None,
             ) from exc
-        return [
-            array.detach().float().cpu().numpy() for array in self._as_outputs(output)
-        ]
+        return [array.detach().float().cpu().numpy() for array in self._as_outputs(output)]

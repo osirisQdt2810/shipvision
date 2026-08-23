@@ -185,9 +185,7 @@ class TestCalibrationBatchFeeder:
 
     def test_data_inside_the_declared_value_range_passes(self) -> None:
         normalised = np.full((4, 3, 8, 8), 0.44, dtype=np.float32)
-        feeder = CalibrationBatchFeeder(
-            [normalised], batch_shape=SHAPE, value_range=(0.0, 1.0)
-        )
+        feeder = CalibrationBatchFeeder([normalised], batch_shape=SHAPE, value_range=(0.0, 1.0))
 
         assert feeder.next_batch().shape == SHAPE
 

@@ -39,7 +39,7 @@ from shipvision.errors import ConfigurationError, DimensionMismatchError
 from shipvision.imgproc.geometry import LetterboxGeometry
 from shipvision.imgproc.nms import METHODS, NONE, suppress
 from shipvision.registry import PYTHON, Registry
-from shipvision.types import Detections, Detection, FrameTag
+from shipvision.types import Detection, Detections, FrameTag
 
 __all__ = [
     "HEADS",
@@ -145,9 +145,7 @@ class DetectionHead(abc.ABC):
         num_classes: int | None = None,
     ) -> None:
         if not 0.0 <= conf_threshold <= 1.0:
-            raise ConfigurationError(
-                f"conf_threshold must be in [0, 1], got {conf_threshold}"
-            )
+            raise ConfigurationError(f"conf_threshold must be in [0, 1], got {conf_threshold}")
         if not 0.0 <= iou_threshold <= 1.0:
             raise ConfigurationError(f"iou_threshold must be in [0, 1], got {iou_threshold}")
         if nms_method not in METHODS:

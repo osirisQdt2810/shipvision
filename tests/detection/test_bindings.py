@@ -221,7 +221,7 @@ class TestImageInput:
         ]
 
         with pytest.raises(ModelLoadError, match="picking the first would be guessing"):
-            read(specs).image_input
+            read(specs).image_input  # noqa: B018 — the access IS the test
 
 
 class TestInputHwDiscovery:
@@ -344,7 +344,7 @@ class TestBatchBounds:
         )
 
         with pytest.raises(ModelLoadError, match="no optimisation profile"):
-            bindings.max_batch
+            bindings.max_batch  # noqa: B018 — the access IS the test
 
     def test_a_profile_of_differing_ranks_is_refused(self) -> None:
         specs = [

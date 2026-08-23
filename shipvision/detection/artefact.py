@@ -84,8 +84,8 @@ class ArtefactDetector(Detector):
         self.pad_value = int(pad_value)
         self.mean = None if mean is None else tuple(float(v) for v in mean)
         self.std = None if std is None else tuple(float(v) for v in std)
-        self._ops = image_ops if image_ops is not None else build_image_ops(
-            backend=image_ops_backend
+        self._ops = (
+            image_ops if image_ops is not None else build_image_ops(backend=image_ops_backend)
         )
 
     # -- introspection ----------------------------------------------------------------
@@ -129,9 +129,7 @@ class ArtefactDetector(Detector):
         return self._head.decode(outputs, geometries, tags)
 
     @abc.abstractmethod
-    def _execute(
-        self, batch: np.ndarray, tags: Sequence[FrameTag]
-    ) -> list[np.ndarray]:
+    def _execute(self, batch: np.ndarray, tags: Sequence[FrameTag]) -> list[np.ndarray]:
         """Run the artefact over one ``(n, 3, h, w)`` float32 batch.
 
         Args:
@@ -139,7 +137,7 @@ class ArtefactDetector(Detector):
                 ``max_batch`` rows.
             tags: the frames in the batch, in row order. Passed in so a failure can name the
                 frame it happened on — a
-                :class:`~shipvision.detection.base.DetectionFailure` carries the tag, and a
+                :class:`~shipvision.detection.base.DetectionError` carries the tag, and a
                 backend is the only layer that knows which row was being executed when the
                 driver returned an error.
 
@@ -148,5 +146,5 @@ class ArtefactDetector(Detector):
             leading. One row per input row.
 
         Raises:
-            DetectionFailure: the artefact ran and failed.
+            DetectionError: the artefact ran and failed.
         """

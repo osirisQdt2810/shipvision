@@ -93,7 +93,8 @@ class TestMaskGeometry:
 
     def test_a_square_source_needs_no_unpadding_and_is_unchanged_by_it(self) -> None:
         """The degenerate case worth pinning: with no bars, crop-then-resize and
-        resize-then-crop agree, so a test that only used a square source would pass either way."""
+        resize-then-crop agree, so a test that only used a square source would pass either way.
+        """
         geom = geometry((1080, 1080))
         plane = banded_proto([(0, 80)])
 
@@ -190,17 +191,32 @@ class TestBoxCropBounds:
     """Outward rounding, clipped to the frame, never empty."""
 
     def test_a_fractional_box_is_covered_outward(self) -> None:
-        assert box_crop_bounds(np.array([10.2, 20.7, 30.1, 40.9]), 1080, 1920) == (20, 41, 10, 31)
+        assert box_crop_bounds(np.array([10.2, 20.7, 30.1, 40.9]), 1080, 1920) == (
+            20,
+            41,
+            10,
+            31,
+        )
 
     def test_a_box_past_the_edge_is_clipped(self) -> None:
-        assert box_crop_bounds(np.array([-5.0, -5.0, 5000.0, 5000.0]), 100, 200) == (0, 100, 0, 200)
+        assert box_crop_bounds(np.array([-5.0, -5.0, 5000.0, 5000.0]), 100, 200) == (
+            0,
+            100,
+            0,
+            200,
+        )
 
     def test_a_degenerate_box_still_gives_one_pixel(self) -> None:
         """A ``(0, 0)`` mask is a shape every consumer has to special-case; a 1x1 is not."""
         assert box_crop_bounds(np.array([50.0, 50.0, 50.0, 50.0]), 100, 100) == (50, 51, 50, 51)
 
     def test_a_box_at_the_far_corner_still_gives_one_pixel(self) -> None:
-        assert box_crop_bounds(np.array([200.0, 100.0, 200.0, 100.0]), 100, 200) == (99, 100, 199, 200)
+        assert box_crop_bounds(np.array([200.0, 100.0, 200.0, 100.0]), 100, 200) == (
+            99,
+            100,
+            199,
+            200,
+        )
 
 
 class TestSegmentationMasks:
@@ -254,9 +270,9 @@ class TestSegmentationMasks:
         geom = geometry(LANDSCAPE)
         outputs = self.seg_outputs(banded_proto([CONTENT_ROWS]), geom)
 
-        result = HEADS.build("yolo26_seg", binarise=False).decode(
-            [*outputs], [geom], [_tag()]
-        )[0]
+        result = HEADS.build("yolo26_seg", binarise=False).decode([*outputs], [geom], [_tag()])[
+            0
+        ]
 
         mask = result[0].mask
         assert mask.dtype == np.float32
@@ -278,9 +294,7 @@ class TestSegmentationMasks:
         detections = np.zeros((1, 4, 38), dtype=np.float32)
         prototypes = np.zeros((1, 32, PROTO, PROTO), dtype=np.float32)
 
-        result = HEADS.build("yolo26_seg").decode(
-            [detections, prototypes], [geom], [_tag()]
-        )[0]
+        result = HEADS.build("yolo26_seg").decode([detections, prototypes], [geom], [_tag()])[0]
 
         assert len(result) == 0
         assert result.boxes.shape == (0, 4)
@@ -290,9 +304,9 @@ class TestSegmentationMasks:
         geom = geometry(LANDSCAPE)
         detections, prototypes = self.seg_outputs(banded_proto([CONTENT_ROWS]), geom)
 
-        swapped = HEADS.build("yolo26_seg").decode(
-            [prototypes, detections], [geom], [_tag()]
-        )[0]
+        swapped = HEADS.build("yolo26_seg").decode([prototypes, detections], [geom], [_tag()])[
+            0
+        ]
 
         assert len(swapped) == 1 and swapped[0].mask.all()
 

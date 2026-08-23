@@ -107,7 +107,9 @@ def bilinear_resize(
     """
     array = np.asarray(plane, dtype=np.float32)
     if array.ndim != 2:
-        raise DimensionMismatchError(f"bilinear_resize takes one (h, w) plane, got {array.shape}")
+        raise DimensionMismatchError(
+            f"bilinear_resize takes one (h, w) plane, got {array.shape}"
+        )
     if array.shape[0] == 0 or array.shape[1] == 0:
         raise DimensionMismatchError(f"cannot resize an empty plane {array.shape}")
     if out_height <= 0 or out_width <= 0:
@@ -146,7 +148,9 @@ def _validated_window(
     return y0, y1, x0, x1
 
 
-def _axis_taps(source_extent: int, out_extent: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _axis_taps(
+    source_extent: int, out_extent: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """``(low_index, high_index, weight)`` for one axis of a bilinear resize."""
     centres = resize_centres(source_extent, out_extent)
     low = np.floor(centres).astype(np.int64)
@@ -191,9 +195,7 @@ def unpad_mask(
         top : top + max(1, min(geometry.resized_height, geometry.target_height - top)),
         left : left + max(1, min(geometry.resized_width, geometry.target_width - left)),
     ]
-    return bilinear_resize(
-        inner, geometry.source_height, geometry.source_width, window=window
-    )
+    return bilinear_resize(inner, geometry.source_height, geometry.source_width, window=window)
 
 
 def _sigmoid(logits: np.ndarray) -> np.ndarray:

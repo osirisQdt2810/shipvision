@@ -37,16 +37,14 @@ class TestPackageImports:
 
     def test_importing_the_package_does_not_import_torch_or_tensorrt(self) -> None:
         """Checked in a clean interpreter, because this one has already imported plenty."""
-        script = textwrap.dedent(
-            """
+        script = textwrap.dedent("""
             import sys
             import shipvision.detection as detection
             assert detection.DETECTORS.names() == ["mock", "yolo26"], detection.DETECTORS.names()
             assert "torch" not in sys.modules, "importing the package imported torch"
             assert "tensorrt" not in sys.modules, "importing the package imported tensorrt"
             print("ok")
-            """
-        )
+            """)
         result = _run(script)
 
         assert result.stdout.strip().endswith("ok"), result.stderr
@@ -54,8 +52,7 @@ class TestPackageImports:
     def test_the_package_imports_with_both_runtimes_unimportable(self) -> None:
         """`None` in ``sys.modules`` is exactly what an unimportable module looks like to
         ``import``, so this is the real path on a machine that happens to have them."""
-        script = textwrap.dedent(
-            """
+        script = textwrap.dedent("""
             import sys
             sys.modules["torch"] = None
             sys.modules["tensorrt"] = None
@@ -77,8 +74,7 @@ class TestPackageImports:
                 else:
                     raise AssertionError(backend + " did not report itself unavailable")
             print("ok")
-            """
-        )
+            """)
         result = _run(script)
 
         assert result.stdout.strip().endswith("ok"), result.stderr
@@ -112,9 +108,7 @@ class TestBackendAvailability:
         monkeypatch.setitem(sys.modules, absent, None)
 
         with pytest.raises(BackendUnavailableError, match=absent):
-            DETECTORS.build(
-                "yolo26", backend=backend, path=tmp_path / "absent.engine", **extra
-            )
+            DETECTORS.build("yolo26", backend=backend, path=tmp_path / "absent.engine", **extra)
 
     def test_building_an_engine_without_tensorrt_says_so(self, monkeypatch, tmp_path) -> None:
         from shipvision.detection import OptimisationProfile, build_engine
@@ -327,9 +321,7 @@ class TestTorchDetector:
         junk = tmp_path / "junk.ts"
         junk.write_text("this is not a model")
         with pytest.raises(ModelLoadError, match="not a loadable TorchScript module"):
-            DETECTORS.build(
-                "yolo26", backend=TORCH, path=junk, input_hw=SMALL_NETWORK
-            )
+            DETECTORS.build("yolo26", backend=TORCH, path=junk, input_hw=SMALL_NETWORK)
 
     def test_a_frame_with_no_pixels_is_refused_with_its_tag_named(
         self, scripted_detector
@@ -432,9 +424,7 @@ class TestTensorRTDetector:
 
     def test_a_configured_extent_that_contradicts_the_engine_is_refused(self, engine) -> None:
         with pytest.raises(ModelLoadError, match="The engine is the artefact and wins"):
-            DETECTORS.build(
-                "yolo26", backend=TENSORRT, path=engine, input_hw=(128, 128)
-            )
+            DETECTORS.build("yolo26", backend=TENSORRT, path=engine, input_hw=(128, 128))
 
     def test_the_boxes_come_back_in_source_pixels(self, engine) -> None:
         detector = DETECTORS.build(
@@ -467,6 +457,6 @@ class TestTensorRTDetector:
 def _run(script: str):
     import subprocess
 
-    return subprocess.run(  # noqa: S603
+    return subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, check=False
     )

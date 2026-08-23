@@ -14,7 +14,7 @@ import textwrap
 import numpy as np
 import pytest
 
-from shipvision.detection import DETECTORS, DetectionFailure, MockDetector, frame_hw
+from shipvision.detection import DETECTORS, DetectionError, MockDetector, frame_hw
 from shipvision.errors import ConfigurationError, InferenceError
 from shipvision.types import Frame, FrameTag, iou_matrix
 
@@ -85,8 +85,7 @@ class TestMockDeterminism:
         """``hash`` is salted per process for `str`, so a scene keyed on a camera id with
         ``hash`` would differ between runs — and a test whose expected answer depends on
         ``PYTHONHASHSEED`` is worse than no test."""
-        script = textwrap.dedent(
-            """
+        script = textwrap.dedent("""
             from shipvision.detection import MockDetector
             from shipvision.types import Frame, FrameTag
             detector = MockDetector(objects=3, jitter=1.0)
@@ -94,13 +93,12 @@ class TestMockDeterminism:
                 Frame(FrameTag("cam-42", 11), image=None, height=1080, width=1920)
             )
             print(";".join(f"{v:.6f}" for box in result.boxes for v in box))
-            """
-        )
+            """)
         outputs = []
         for seed in ("0", "12345"):
             environment = {**os.environ, "PYTHONHASHSEED": seed}
             outputs.append(
-                subprocess.run(  # noqa: S603
+                subprocess.run(
                     [sys.executable, "-c", script],
                     check=True,
                     capture_output=True,
@@ -195,9 +193,7 @@ class TestMockScene:
         detector = MockDetector(objects=(1, 6))
 
         counts = {
-            camera: {
-                len(detector.detect_one(frame(camera, i))) for i in range(5)
-            }
+            camera: {len(detector.detect_one(frame(camera, i))) for i in range(5)}
             for camera in (f"cam-{i:02d}" for i in range(12))
         }
 
@@ -267,7 +263,7 @@ class TestMockFailure:
         for frame_id in range(9):
             try:
                 detector.detect_one(frame("cam-01", frame_id))
-            except DetectionFailure:
+            except DetectionError:
                 failed.append(frame_id)
 
         assert failed == [0, 3, 6]
@@ -277,9 +273,9 @@ class TestMockFailure:
         regardless of the batcher."""
         detector = MockDetector(objects=1, fail_every=4)
 
-        with pytest.raises(DetectionFailure) as one_at_a_time:
+        with pytest.raises(DetectionError) as one_at_a_time:
             detector.detect_one(frame("cam-01", 8))
-        with pytest.raises(DetectionFailure) as in_a_batch:
+        with pytest.raises(DetectionError) as in_a_batch:
             detector.detect([frame("cam-01", 5), frame("cam-01", 8), frame("cam-01", 9)])
 
         assert one_at_a_time.value.tag == in_a_batch.value.tag == FrameTag("cam-01", 8)
@@ -288,7 +284,7 @@ class TestMockFailure:
         """A server that must attribute a gap to a camera cannot parse a message to do it."""
         detector = MockDetector(objects=1, fail_every=5)
 
-        with pytest.raises(DetectionFailure) as raised:
+        with pytest.raises(DetectionError) as raised:
             detector.detect_one(frame("cam-77", 10))
 
         assert raised.value.tag == FrameTag("cam-77", 10)

@@ -125,9 +125,7 @@ class Yolo26SegHead(Yolo26Head):
             y0, y1, x0, x1 = bounds
             probability = unpad_mask(logits[index], geometry, window=(y0, y1, x0, x1))
             masks.append(
-                probability >= np.float32(self.mask_threshold)
-                if self.binarise
-                else probability
+                probability >= np.float32(self.mask_threshold) if self.binarise else probability
             )
         return masks
 

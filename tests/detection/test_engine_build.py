@@ -86,9 +86,7 @@ class TestOptimisationProfile:
 
     def test_an_empty_input_name_is_refused(self) -> None:
         with pytest.raises(ConfigurationError, match="name of the input"):
-            OptimisationProfile(
-                input_name="", minimum=(1,), optimum=(1,), maximum=(1,)
-            )
+            OptimisationProfile(input_name="", minimum=(1,), optimum=(1,), maximum=(1,))
 
     @pytest.mark.parametrize("kwargs", [{"input_hw": (0, 64)}, {"channels": 0}])
     def test_for_batch_validates_its_own_arguments(self, kwargs) -> None:

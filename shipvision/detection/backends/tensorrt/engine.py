@@ -33,7 +33,7 @@ import numpy as np
 
 from shipvision.detection.artefact import ArtefactDetector
 from shipvision.detection.backends.tensorrt.bindings import Binding, EngineBindings
-from shipvision.detection.base import DetectionFailure
+from shipvision.detection.base import DetectionError
 from shipvision.detection.heads import resolve_head
 from shipvision.errors import (
     BackendUnavailableError,
@@ -180,7 +180,9 @@ class TensorRTDetector(ArtefactDetector):
     def _buffer(self, binding: Binding, shape: Sequence[int]) -> Any:
         torch = self._torch
         dtype = self._torch_dtype(binding)
-        return torch.empty(tuple(int(v) for v in shape), dtype=dtype, device=f"cuda:{self.device}")
+        return torch.empty(
+            tuple(int(v) for v in shape), dtype=dtype, device=f"cuda:{self.device}"
+        )
 
     def _torch_dtype(self, binding: Binding) -> Any:
         torch = self._torch
@@ -232,7 +234,7 @@ class TensorRTDetector(ArtefactDetector):
             if self._bindings.dynamic_batch and not self._context.set_input_shape(
                 image.name, (rows, *self._device_in.shape[1:])
             ):
-                raise DetectionFailure(
+                raise DetectionError(
                     f"{self.path} refused a batch of {rows}; its profile allows at most "
                     f"{self.max_batch}",
                     tag=tag,
@@ -243,7 +245,7 @@ class TensorRTDetector(ArtefactDetector):
                     binding.name, self._device_out[binding.name].data_ptr()
                 )
             if not self._context.execute_async_v3(self._stream.cuda_stream):
-                raise DetectionFailure(
+                raise DetectionError(
                     f"{self.path} failed to enqueue a batch of {rows}", tag=tag
                 )
             return
@@ -256,4 +258,4 @@ class TensorRTDetector(ArtefactDetector):
         for binding in self._bindings.outputs:
             addresses[binding.index] = self._device_out[binding.name].data_ptr()
         if not self._context.execute_async_v2(addresses, self._stream.cuda_stream):
-            raise DetectionFailure(f"{self.path} failed to enqueue a batch of {rows}", tag=tag)
+            raise DetectionError(f"{self.path} failed to enqueue a batch of {rows}", tag=tag)

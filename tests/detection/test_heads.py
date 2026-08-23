@@ -42,7 +42,9 @@ class TestLetterboxInversion:
     in any smoke test and shifts every detection on every camera in production, permanently.
     """
 
-    @pytest.mark.parametrize(("source_hw", "label"), [(LANDSCAPE, "even pad"), (ODD_PAD, "odd pad")])
+    @pytest.mark.parametrize(
+        ("source_hw", "label"), [(LANDSCAPE, "even pad"), (ODD_PAD, "odd pad")]
+    )
     def test_boxes_round_trip_through_the_letterbox(self, source_hw, label, tag) -> None:
         geom = geometry(source_hw)
         output = detection_output(
@@ -55,7 +57,9 @@ class TestLetterboxInversion:
         # A thousandth of a pixel. The bound is tight on purpose: the only error left after an
         # exact algebraic inverse is float32 rounding, so anything larger is a real mistake and
         # not a tolerance to be widened.
-        assert np.abs(np.sort(result.boxes, axis=0) - np.sort(SOURCE_BOXES, axis=0)).max() < 1e-3
+        assert (
+            np.abs(np.sort(result.boxes, axis=0) - np.sort(SOURCE_BOXES, axis=0)).max() < 1e-3
+        )
 
     def test_the_odd_pad_case_really_is_odd(self) -> None:
         """Guard on the fixture: the test above only tests what it claims if this holds."""
@@ -83,9 +87,9 @@ class TestLetterboxInversion:
         reference_y = (network[:, 1] - reference_pad) / gain
 
         assert float(reference_pad) == pytest.approx(139.5, abs=1e-3)
-        assert np.abs(np.sort(reference_y) - np.sort(SOURCE_BOXES[:, 1])).max() == pytest.approx(
-            1.5, abs=0.01
-        )
+        assert np.abs(
+            np.sort(reference_y) - np.sort(SOURCE_BOXES[:, 1])
+        ).max() == pytest.approx(1.5, abs=0.01)
         assert np.abs(np.sort(ours.boxes[:, 1]) - np.sort(SOURCE_BOXES[:, 1])).max() < 1e-3
 
     def test_the_carried_geometry_is_used_and_not_recomputed(self, tag) -> None:
@@ -282,7 +286,9 @@ class TestSuppression:
         assert len(result) == 1
         assert result[0].score == pytest.approx(0.9)
 
-    def test_suppression_is_per_class_so_a_person_in_front_of_a_ship_survives(self, tag) -> None:
+    def test_suppression_is_per_class_so_a_person_in_front_of_a_ship_survives(
+        self, tag
+    ) -> None:
         output = detection_output(self.DUPLICATES, [0.9, 0.8], [0.0, 1.0])
 
         per_class = HEADS.build("yolo26", nms_method="classic", iou_threshold=0.5)
@@ -293,7 +299,9 @@ class TestSuppression:
         assert len(per_class.decode([output], [geometry()], [tag])[0]) == 2
         assert len(agnostic.decode([output], [geometry()], [tag])[0]) == 1
 
-    def test_a_soft_method_returns_the_decayed_score_and_drops_what_falls_below(self, tag) -> None:
+    def test_a_soft_method_returns_the_decayed_score_and_drops_what_falls_below(
+        self, tag
+    ) -> None:
         """Soft NMS suppresses by lowering scores, so the confidence threshold is what actually
         removes a box — passing it as the floor is the difference between suppression and a
         re-ranking."""
@@ -337,15 +345,15 @@ class TestOutputOrdering:
         )
         output = detection_output(boxes, [0.4, 0.95, 0.7], [3.0, 1.0, 2.0])
 
-        result = HEADS.build("yolo26", conf_threshold=0.1).decode([output], [geometry()], [tag])[0]
+        result = HEADS.build("yolo26", conf_threshold=0.1).decode(
+            [output], [geometry()], [tag]
+        )[0]
 
         assert result.scores.tolist() == pytest.approx([0.95, 0.7, 0.4])
         assert result.class_ids.tolist() == [1, 2, 3]
 
     def test_a_tie_breaks_towards_the_lower_proposal_index(self, tag) -> None:
-        boxes = np.array(
-            [[200.0, 0.0, 210.0, 10.0], [0.0, 0.0, 10.0, 10.0]], dtype=np.float32
-        )
+        boxes = np.array([[200.0, 0.0, 210.0, 10.0], [0.0, 0.0, 10.0, 10.0]], dtype=np.float32)
         output = detection_output(boxes, [0.5, 0.5], [0.0, 0.0])
 
         result = HEADS.build("yolo26").decode([output], [geometry()], [tag])[0]

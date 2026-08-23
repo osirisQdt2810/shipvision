@@ -6,7 +6,7 @@ testable with no hardware:
 :mod:`~shipvision.detection.base`
     The :class:`~shipvision.detection.base.Detector` contract and :data:`DETECTORS`. Two rules
     live here — ``input_hw`` is discovered from the artefact, and the tag survives every path
-    including the error path (:class:`~shipvision.detection.base.DetectionFailure` carries it).
+    including the error path (:class:`~shipvision.detection.base.DetectionError` carries it).
 :mod:`~shipvision.detection.heads`
     Output tensor to :class:`~shipvision.types.Detections`, one head per model family. Pure
     numpy, so a synthesised output whose right answer you chose is a complete test of a decode
@@ -44,7 +44,7 @@ from shipvision.detection.artefact import ArtefactDetector
 from shipvision.detection.backends import MockDetector
 from shipvision.detection.base import (
     DETECTORS,
-    DetectionFailure,
+    DetectionError,
     Detector,
     empty_detections,
     frame_hw,
@@ -71,7 +71,7 @@ __all__ = [
     "HEADS",
     "ArtefactDetector",
     "Candidates",
-    "DetectionFailure",
+    "DetectionError",
     "DetectionHead",
     "Detector",
     "MockDetector",

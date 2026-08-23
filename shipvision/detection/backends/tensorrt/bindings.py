@@ -121,9 +121,7 @@ class EngineBindings:
             artefact: what to call the engine in an error message.
         """
         named = hasattr(engine, "num_io_tensors")
-        entries = (
-            cls._read_named(engine, trt) if named else cls._read_indexed(engine, trt)
-        )
+        entries = cls._read_named(engine, trt) if named else cls._read_indexed(engine, trt)
         inputs = tuple(b for b in entries if b.is_input)
         outputs = tuple(b for b in entries if not b.is_input)
         if not inputs or not outputs:
@@ -313,9 +311,7 @@ def _profile_of(
         ) from exc
     shapes = tuple(tuple(int(v) for v in shape) for shape in (minimum, optimum, maximum))
     if len({len(shape) for shape in shapes}) != 1:
-        raise ModelLoadError(
-            f"binding {name!r} has profile shapes of differing rank: {shapes}"
-        )
+        raise ModelLoadError(f"binding {name!r} has profile shapes of differing rank: {shapes}")
     return shapes  # type: ignore[return-value]
 
 
