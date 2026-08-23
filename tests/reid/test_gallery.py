@@ -363,3 +363,108 @@ class TestAGalleryRefusesNonFiniteVectors:
 
         with pytest.raises(ConfigurationError, match="non-finite"):
             gallery.query(probe)
+
+
+class TestFlatGalleryBookkeepingUnderChurn:
+    """The two invariants :class:`FlatGallery` documents, asserted directly.
+
+    Both were mutation-tested and both survived the whole suite: turning
+    ``sorted(rows, reverse=True)`` into ``sorted(rows)`` in `remove_identity`, and
+    ``min(rows, key=sequence)`` into ``max(...)`` in `_make_room`, left every test green.
+    They are real bugs — ascending removal order hands the loop a row it has already visited
+    under a new number, and `max` trims the newest view instead of the oldest — and the
+    end-to-end tests could not see either, because a top-1 answer is still plausible after
+    the wrong row has been dropped.
+
+    So these reach into the private index map on purpose. Compaction is the one part of this
+    class whose correctness is not observable from outside until it is far too late: a stale
+    index returns the right score attached to the wrong identity.
+    """
+
+    INVARIANT_CHECKS = 6
+
+    def _assert_bookkeeping(self, gallery, context: str) -> None:
+        size = len(gallery)
+        rows_by_identity = gallery._by_identity
+        stored = gallery._identity
+
+        assert len(stored) == size, f"{context}: identity list and size disagree"
+        flat = [row for rows in rows_by_identity.values() for row in rows]
+        assert all(0 <= row < size for row in flat), f"{context}: an index is out of range"
+        for identity, rows in rows_by_identity.items():
+            assert rows, f"{context}: {identity} is an orphaned empty entry"
+            for row in rows:
+                assert stored[row] == identity, (
+                    f"{context}: row {row} is indexed under {identity} but holds "
+                    f"{stored[row]} — a query would report the wrong identity"
+                )
+        assert len(flat) == len(set(flat)), f"{context}: a row is indexed twice"
+        assert sorted(flat) == list(range(size)), f"{context}: a live row is unreachable"
+        assert set(rows_by_identity) == set(stored), f"{context}: the two views disagree"
+
+    def test_the_index_map_stays_exact_through_four_thousand_mixed_operations(self) -> None:
+        """Adds that trip the per-identity cap, adds that trip the global cap, and whole
+        identities removed, interleaved — every path that moves a row, mixed rather than
+        one at a time, because they only interact badly when they interleave."""
+        gallery = GALLERIES.build("flat", capacity=40, per_identity=3)
+        rng = np.random.default_rng(20260823)
+
+        for step in range(4_000):
+            identity = int(rng.integers(9))
+            if rng.random() < 0.12:
+                gallery.remove_identity(f"ship-{identity}")
+            else:
+                gallery.add(
+                    Embedding(
+                        vector=view_of(identity, view=step),
+                        identity=f"ship-{identity}",
+                        camera_id=f"cam-{identity % 3}",
+                        frame_id=step,
+                    )
+                )
+            self._assert_bookkeeping(gallery, f"step {step}")
+
+        assert len(gallery) > 0, "the churn must not have emptied it by accident"
+
+    def test_removing_an_identity_with_many_rows_leaves_the_rest_intact(self) -> None:
+        """`remove_identity` drops its rows highest-index-first because a swap-with-last
+        only ever moves a row *down*. Ascending order hands the loop a row number it has
+        already visited, now occupied by something else."""
+        gallery = GALLERIES.build("flat", capacity=64, per_identity=8)
+        for identity in range(6):
+            enrol(gallery, identity, views=8)
+
+        removed = gallery.remove_identity("ship-0")
+
+        assert removed == 8
+        self._assert_bookkeeping(gallery, "after a wide removal")
+        assert len(gallery) == 5 * 8
+        for identity in range(1, 6):
+            assert gallery.count_for(f"ship-{identity}") == 8
+            assert gallery.query(view_of(identity, view=50)).best.identity == f"ship-{identity}"
+
+    def test_per_identity_eviction_drops_the_oldest_view_not_the_newest(self) -> None:
+        """The frame ids say which views survived, so this cannot be satisfied by keeping
+        the right *number* of rows. Trimming the newest is the plausible-looking mistake:
+        the count stays right, the top-1 answer stays right, and the gallery quietly becomes
+        a record of what the ship looked like when it arrived.
+        """
+        gallery = GALLERIES.build("flat", capacity=10, per_identity=3)
+        for view in range(10):
+            gallery.add(
+                Embedding(
+                    vector=view_of(1, view=view),
+                    identity="ship-1",
+                    camera_id="cam-a",
+                    frame_id=view,
+                )
+            )
+            surviving = sorted(m.frame_id for m in gallery.query(view_of(1), top_k=3).matches)
+            expected = sorted(range(max(0, view - 2), view + 1))
+            assert surviving == expected, f"after view {view}"
+
+        assert sorted(m.frame_id for m in gallery.query(view_of(1), top_k=3).matches) == [
+            7,
+            8,
+            9,
+        ]
