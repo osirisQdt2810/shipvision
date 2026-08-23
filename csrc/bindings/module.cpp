@@ -253,6 +253,17 @@ namespace {
           }
           const int h = static_cast<int>(info.shape[0]);
           const int w = static_cast<int>(info.shape[1]);
+          // Both extents must be positive, and this is not a redundant check on top of the
+          // Python one. `out_h` below floors at 1, so a zero-row frame still gets a row of
+          // output, the kernel samples `src_y = -0.5`, and `sample_bilinear` clamps its high
+          // tap to `min(y0 + 1, h - 1) = -1` — a read before the staging allocation at batch
+          // index 0, and a read of the *previous frame's* pixels at any higher index. The
+          // first raises cudaErrorIllegalAddress, which is sticky and kills the worker for
+          // the life of the process; the second is silent. This entry point is reachable from
+          // any caller, so the guard cannot live only in Python.
+          if (h <= 0 || w <= 0) {
+            throw std::invalid_argument("each image extent must be positive");
+          }
           const float scale =
               std::min(static_cast<float>(dst_h) / h, static_cast<float>(dst_w) / w);
           const int out_h = std::max(1, static_cast<int>(lroundf(h * scale)));
@@ -286,6 +297,9 @@ namespace {
         }
         if (box_info.ndim != 2 || box_info.shape[1] != 4) {
           throw std::invalid_argument("boxes must be (N, 4) float32");
+        }
+        if (image_info.shape[0] <= 0 || image_info.shape[1] <= 0) {
+          throw std::invalid_argument("each image extent must be positive");
         }
         const int num_boxes = static_cast<int>(box_info.shape[0]);
         const size_t required =

@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 
 from shipvision.errors import ConfigurationError, DimensionMismatchError
+from shipvision.imgproc.validation import reject_non_finite
 
 __all__ = [
     "CLASSIC",
@@ -58,10 +59,17 @@ def prepare(
         Contiguous float32 ``boxes`` and ``scores``, plus ``order``: the indices that clear
         ``score_threshold``, stably sorted by descending score.
 
+    Non-finite boxes and scores are refused here rather than downstream, because this is the
+    one function every method and every backend passes through — including the device kernel,
+    which is handed the candidate set this decides on. A NaN coordinate makes the kernel and
+    numpy disagree about which boxes survive, and a NaN score makes the surviving *order*
+    depend on the sort implementation; see
+    :func:`~shipvision.imgproc.validation.reject_non_finite`.
+
     Raises:
         DimensionMismatchError: the box and score counts differ.
-        ConfigurationError: an unknown method, an out-of-range threshold, or a non-positive
-            sigma for the one method that reads it.
+        ConfigurationError: an unknown method, an out-of-range threshold, a non-positive
+            sigma for the one method that reads it, or a non-finite box or score.
     """
     box_array = np.ascontiguousarray(np.asarray(boxes, dtype=np.float32).reshape(-1, 4))
     score_array = np.ascontiguousarray(np.asarray(scores, dtype=np.float32).reshape(-1))
@@ -76,6 +84,8 @@ def prepare(
         raise ConfigurationError(f"iou_threshold must be in [0, 1], got {iou_threshold}")
     if method == GAUSS and sigma <= 0.0:
         raise ConfigurationError(f"gauss nms needs a positive sigma, got {sigma}")
+    reject_non_finite(box_array, "nms boxes")
+    reject_non_finite(score_array, "nms scores")
 
     admitted = np.flatnonzero(score_array >= np.float32(score_threshold))
     # Negating rather than reversing an ascending sort: reversing would flip the tie order

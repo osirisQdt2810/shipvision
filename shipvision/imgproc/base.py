@@ -34,6 +34,7 @@ import numpy as np
 from shipvision.errors import ConfigurationError, DimensionMismatchError
 from shipvision.imgproc.geometry import LetterboxGeometry
 from shipvision.imgproc.nms import CLASSIC, METHODS, suppress
+from shipvision.imgproc.validation import reject_non_finite
 
 __all__ = [
     "DEFAULT_MEAN",
@@ -59,10 +60,25 @@ preprocessing its weights were trained with."""
 
 
 def validate_image(image: np.ndarray, *, what: str = "image") -> np.ndarray:
-    """An ``(h, w, 3)`` uint8 C-contiguous view of ``image``. See the module docstring."""
+    """An ``(h, w, 3)`` uint8 C-contiguous view of ``image``. See the module docstring.
+
+    Both spatial extents must be positive, and that check belongs *here* rather than in
+    :meth:`~shipvision.imgproc.geometry.LetterboxGeometry.plan` alone: the native backend
+    launches its kernel before it builds the geometries, so a zero-row frame used to reach the
+    sampler, which clamps its high tap to ``min(y0 + 1, h - 1) = -1`` and indexes *before* the
+    allocation. That raises ``cudaErrorIllegalAddress``, which is **sticky** — it poisons the
+    context for the life of the process, so one reconnecting camera killed the worker
+    permanently. At a batch index above zero the same read lands inside the staging ring
+    instead and returns the previous camera's pixels with no error at all, which is worse.
+    """
     array = np.asarray(image)
     if array.ndim != 3 or array.shape[2] != 3:
         raise DimensionMismatchError(f"{what} must be (h, w, 3) HWC BGR, got {array.shape}")
+    if array.shape[0] <= 0 or array.shape[1] <= 0:
+        raise DimensionMismatchError(
+            f"{what} is {array.shape[0]}x{array.shape[1]}; both extents must be > 0. An empty "
+            f"frame is a decoder failure, not a frame with no objects in it"
+        )
     if array.dtype != np.uint8:
         raise ConfigurationError(
             f"{what} must be uint8 in 0-255, got {array.dtype}. Scale and cast at the decoder "
@@ -72,12 +88,18 @@ def validate_image(image: np.ndarray, *, what: str = "image") -> np.ndarray:
 
 
 def validate_boxes(boxes: np.ndarray) -> np.ndarray:
-    """An ``(n, 4)`` float32 C-contiguous xyxy array. ``(0, 4)`` for an empty frame."""
+    """An ``(n, 4)`` float32 C-contiguous xyxy array. ``(0, 4)`` for an empty frame.
+
+    Non-finite coordinates are refused rather than clamped — see
+    :func:`~shipvision.imgproc.validation.reject_non_finite` for why a NaN cannot be given a
+    sensible value here: the three backends already gave it three different ones.
+    """
     array = np.asarray(boxes, dtype=np.float32)
     if array.size == 0:
         return np.zeros((0, 4), dtype=np.float32)
     if array.ndim != 2 or array.shape[1] != 4:
         raise DimensionMismatchError(f"boxes must be (n, 4) xyxy, got {array.shape}")
+    reject_non_finite(array, "boxes")
     return np.ascontiguousarray(array)
 
 
