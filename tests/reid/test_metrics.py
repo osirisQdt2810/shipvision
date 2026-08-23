@@ -180,3 +180,34 @@ class TestTheCameraFilterCannotBeHalfSupplied:
         assert filtered.rank(1) == 0.0
         assert filtered.mean_ap == pytest.approx(0.5)
         assert unfiltered.rank(1) == 1.0, "the trivial self-match, counted on purpose"
+
+
+class TestARankingResultIsSafeToPrint:
+    """``__repr__`` is called by a log line, a debugger and pytest's own failure output, so
+    it is the one method that must not raise. ``rank`` used to index ``cmc[-1]`` when the
+    curve was empty, which turned printing an evaluation of an empty gallery into an
+    IndexError from inside the repr — the traceback then blames whatever was logging.
+    """
+
+    def test_an_empty_gallery_can_still_be_printed(self) -> None:
+        result = evaluate_ranking(np.zeros((2, 0), dtype=np.float32), ["a", "b"], [])
+
+        text = repr(result)
+
+        assert "no ranking" in text
+        assert "skipped=2" in text
+
+    def test_asking_for_a_rank_that_does_not_exist_is_a_typed_error(self) -> None:
+        """Not 0.0. A zero would say the model was wrong on every query, which is a claim
+        about the model; an empty gallery is a claim about the test set."""
+        result = evaluate_ranking(np.zeros((1, 0), dtype=np.float32), ["a"], [])
+
+        with pytest.raises(ConfigurationError, match="empty"):
+            result.rank(1)
+
+    def test_asking_beyond_the_end_of_a_real_curve_returns_the_end(self) -> None:
+        """Clamped on purpose, and documented: rank-5 on a two-entry gallery is rank-2,
+        because every query that was going to be found has been found by then."""
+        result = evaluate_ranking(sim([[0.9, 0.1]]), ["a"], ["a", "b"])
+
+        assert result.rank(5) == result.rank(2) == result.cmc[-1]

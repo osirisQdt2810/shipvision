@@ -43,12 +43,37 @@ class RankingResult:
     skipped: int
 
     def rank(self, k: int) -> float:
-        """Rank-k accuracy, 1-indexed as everyone writes it (``rank(1)`` is rank-1)."""
+        """Rank-k accuracy, 1-indexed as everyone writes it (``rank(1)`` is rank-1).
+
+        Clamped at the end of the curve on purpose: ``rank(5)`` on a two-entry gallery is
+        rank-2, because by the end of the ranking every query that was ever going to be
+        found has been found, and the curve is flat from there. Reporting rank-5 as 0 for a
+        short gallery would be a worse answer than reporting the plateau.
+
+        Raises:
+            ConfigurationError: if the curve is empty, which means the gallery was. There is
+                no rank to report then, and 0.0 would be the wrong answer: it says the model
+                was wrong on every query, which is a claim about the model, where an empty
+                gallery is a claim about the test set.
+        """
         if k < 1:
             raise ConfigurationError(f"rank is 1-indexed; got {k}")
+        if len(self.cmc) == 0:
+            raise ConfigurationError(
+                f"no rank-{k} to report: the gallery was empty, so nothing was ranked. "
+                f"{self.skipped} quer{'y was' if self.skipped == 1 else 'ies were'} skipped"
+            )
         return float(self.cmc[min(k, len(self.cmc)) - 1])
 
     def __repr__(self) -> str:
+        # A repr is called by a log line, a debugger and pytest's own failure output, so it
+        # handles the empty curve itself rather than letting `rank` raise out of it — an
+        # exception from here blames whatever was printing.
+        if len(self.cmc) == 0:
+            return (
+                f"<RankingResult no ranking — the gallery was empty n={self.evaluated} "
+                f"skipped={self.skipped}>"
+            )
         return (
             f"<RankingResult rank1={self.rank(1):.4f} rank5={self.rank(5):.4f} "
             f"mAP={self.mean_ap:.4f} n={self.evaluated} skipped={self.skipped}>"
