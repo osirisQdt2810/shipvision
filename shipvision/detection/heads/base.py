@@ -32,6 +32,7 @@ from __future__ import annotations
 import abc
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -143,6 +144,7 @@ class DetectionHead(abc.ABC):
         sigma: float = 0.5,
         max_detections: int | None = 300,
         num_classes: int | None = None,
+        image_ops: Any | None = None,
     ) -> None:
         if not 0.0 <= conf_threshold <= 1.0:
             raise ConfigurationError(f"conf_threshold must be in [0, 1], got {conf_threshold}")
@@ -165,6 +167,10 @@ class DetectionHead(abc.ABC):
         self.class_agnostic = bool(class_agnostic)
         self.sigma = float(sigma)
         self.max_detections = None if max_detections is None else int(max_detections)
+        # Optional, and the default is None on purpose: a head must be constructible with
+        # no backend so the numpy oracle and the offline tier work with nothing installed.
+        # Production should pass one — see :meth:`_suppress`.
+        self._image_ops = image_ops
         self.num_classes = None if num_classes is None else int(num_classes)
 
     # -- the contract -----------------------------------------------------------------
@@ -289,6 +295,33 @@ class DetectionHead(abc.ABC):
             )
         return class_ids
 
+    def _suppress_group(
+        self, boxes: np.ndarray, scores: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """One class's suppression, through the backend when there is one."""
+        if self._image_ops is not None:
+            return self._image_ops.nms_with_scores(
+                boxes,
+                scores,
+                iou_threshold=self.iou_threshold,
+                method=self.nms_method,
+                sigma=self.sigma,
+                score_threshold=self.conf_threshold,
+            )
+        return suppress(
+            boxes,
+            scores,
+            iou_threshold=self.iou_threshold,
+            method=self.nms_method,
+            sigma=self.sigma,
+            score_threshold=self.conf_threshold,
+        )
+
+    @property
+    def image_ops(self) -> Any | None:
+        """The backend suppression is routed through, or `None` for the numpy path."""
+        return self._image_ops
+
     def _suppress(
         self,
         rows: np.ndarray,
@@ -298,16 +331,22 @@ class DetectionHead(abc.ABC):
     ) -> Candidates:
         """Per-class (or class-agnostic) suppression, then one deterministic sort.
 
-        Suppression itself is :func:`shipvision.imgproc.nms.suppress` — the one implementation
-        of the five methods and of the admission, overlap and departure rules.
-        :meth:`~shipvision.imgproc.base.ImageOps.nms_with_scores` is concrete on the base
-        class and delegates to exactly this function, so calling it directly costs nothing and
-        saves the head from having to hold an image-ops backend for what is a scalar loop over
-        a few dozen survivors.
+        Routed through :meth:`~shipvision.imgproc.base.ImageOps.nms_with_scores` when an
+        ``image_ops`` was supplied, and through :func:`shipvision.imgproc.nms.suppress`
+        otherwise. The two agree on indices and on scores; what differs is that the backend
+        reaches a CUDA bitmask kernel or ``torchvision.ops.nms`` for the hard methods, and the
+        difference is not small — measured at 25 000 proposals, the numpy path is roughly
+        150x the device one. A head constructed without a backend still works, which is what
+        keeps the numpy oracle and the offline tier honest, but production should pass one.
+
+        This docstring previously asserted the two were the same implementation and that
+        calling ``suppress`` directly "costs nothing". That was true when written and stopped
+        being true when ``nms_with_scores`` learned to keep the kernel for the hard methods;
+        the head then held the only remaining caller of the slow path in the library.
 
         ``score_threshold=conf_threshold`` is passed on purpose: for a soft method the whole
         output is a re-weighted score, and without a floor every box comes back merely
-        re-ranked. That is the mistake the ``nms_with_scores`` docstring warns about.
+        re-ranked.
         """
         groups = (
             [np.arange(rows.size, dtype=np.int64)]
@@ -318,14 +357,7 @@ class DetectionHead(abc.ABC):
         kept: list[np.ndarray] = []
         kept_scores: list[np.ndarray] = []
         for group in groups:
-            local, decayed = suppress(
-                boxes[group],
-                scores[group],
-                iou_threshold=self.iou_threshold,
-                method=self.nms_method,
-                sigma=self.sigma,
-                score_threshold=self.conf_threshold,
-            )
+            local, decayed = self._suppress_group(boxes[group], scores[group])
             kept.append(group[local])
             kept_scores.append(decayed)
 

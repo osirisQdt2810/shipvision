@@ -12,8 +12,15 @@ import numpy as np
 import pytest
 
 from shipvision.detection.heads import HEADS, Yolo26Head, resolve_head, round_class_ids
-from shipvision.errors import ConfigurationError, DimensionMismatchError, ModelLoadError
+from shipvision.errors import (
+    BackendUnavailableError,
+    ConfigurationError,
+    DimensionMismatchError,
+    ModelLoadError,
+)
+from shipvision.imgproc import IMGPROC
 from shipvision.imgproc.geometry import LetterboxGeometry
+from shipvision.imgproc.nms import CLASSIC, METHODS, suppress
 from shipvision.types import FrameTag
 
 from .conftest import (
@@ -463,3 +470,72 @@ class TestHeadResolution:
         head = resolve_head([(1, 300, 6)], conf_threshold=0.4, nms_method="classic")
 
         assert (head.conf_threshold, head.nms_method) == (0.4, "classic")
+
+
+class TestSuppressionRoutesThroughTheBackend:
+    """A head given an `image_ops` must use it, and must agree with the numpy path.
+
+    Suppression used to always call `shipvision.imgproc.nms.suppress` directly, on the
+    argument that `nms_with_scores` was the same implementation so a backend bought nothing.
+    That was true when written. Once `nms_with_scores` learned to keep the CUDA bitmask kernel
+    and `torchvision.ops.nms` for the hard methods, this head became the only remaining caller
+    of the slow path in the library — measured at roughly 150x the device one over 25 000
+    proposals. These tests keep the fast route wired and keep the two answers identical.
+    """
+
+    def _overlapping(self, count: int = 40) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        rng = np.random.default_rng(11)
+        origins = rng.uniform(0, 120, size=(count, 2)).astype(np.float32)
+        boxes = np.concatenate([origins, origins + 60.0], axis=1).astype(np.float32)
+        scores = rng.uniform(0.3, 0.99, size=count).astype(np.float32)
+        classes = (rng.random(count) > 0.5).astype(np.int32)
+        return boxes, scores, classes
+
+    def test_the_backend_is_actually_called(self) -> None:
+        calls: list[str] = []
+
+        class Spy:
+            def nms_with_scores(self, boxes, scores, **kwargs):
+                calls.append(kwargs["method"])
+                return suppress(boxes, scores, **kwargs)
+
+        head = Yolo26Head(nms_method=CLASSIC, image_ops=Spy())
+        boxes, scores, classes = self._overlapping()
+
+        head._suppress(np.arange(boxes.shape[0]), boxes, scores, classes)
+
+        assert calls, "the head kept the numpy path despite being given a backend"
+        assert set(calls) == {CLASSIC}
+
+    def test_no_backend_still_works(self) -> None:
+        """A head must be constructible with nothing installed — that is what keeps the
+        offline tier and the numpy oracle honest."""
+        head = Yolo26Head(nms_method=CLASSIC)
+
+        assert head.image_ops is None
+        boxes, scores, classes = self._overlapping()
+        kept = head._suppress(np.arange(boxes.shape[0]), boxes, scores, classes)
+        assert len(kept.boxes) > 0
+
+    @pytest.mark.parametrize("method", sorted(METHODS))
+    def test_every_backend_agrees_with_the_numpy_path(self, method: str) -> None:
+        boxes, scores, classes = self._overlapping()
+        rows = np.arange(boxes.shape[0])
+
+        reference = Yolo26Head(nms_method=method)._suppress(rows, boxes, scores, classes)
+
+        # Every backend this machine can actually build. Asking the registry rather than
+        # hard-coding a list means a machine with no torch and no compiled extension runs the
+        # numpy-vs-numpy case and still asserts something, instead of skipping.
+        for backend in IMGPROC.backends("default"):
+            try:
+                ops = IMGPROC.build("default", backend=backend)
+            except BackendUnavailableError:
+                continue
+            through = Yolo26Head(nms_method=method, image_ops=ops)._suppress(
+                rows, boxes, scores, classes
+            )
+            assert np.array_equal(
+                through.boxes, reference.boxes
+            ), f"{backend} disagreed with numpy on {method}"
+            assert np.allclose(through.scores, reference.scores, atol=1e-5)
