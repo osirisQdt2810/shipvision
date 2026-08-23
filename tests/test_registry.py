@@ -173,6 +173,20 @@ def test_a_lazy_entry_is_not_imported_until_it_is_built(registry: Registry) -> N
     assert "tests.lazy_widget" in __import__("sys").modules
 
 
+def test_a_lazy_class_reports_the_same_name_and_backend_as_an_eager_one(
+    registry: Registry,
+) -> None:
+    """The decorator could not stamp these — the class did not exist yet. Without stamping
+    them on import, a log line says "python" for a TensorRT implementation, and the two
+    registration paths become distinguishable to everything downstream."""
+    registry.register_lazy("late", "tests.lazy_widget:LazyWidget", backend=NATIVE)
+
+    built = registry.build("late")
+
+    assert built.name == "late"
+    assert built.backend == NATIVE
+
+
 def test_a_lazy_target_must_name_a_class(registry: Registry) -> None:
     registry.register_lazy("bad", "tests.lazy_widget", backend=NATIVE)
 
