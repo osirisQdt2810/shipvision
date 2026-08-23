@@ -1,0 +1,266 @@
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from shipvision import Embedding
+from shipvision.errors import ConfigurationError, DimensionMismatchError
+from shipvision.reid import GALLERIES
+from tests.reid.conftest import view_of
+
+GALLERY_NAMES = GALLERIES.names()
+
+
+def enrol(gallery, identity: int, views: int = 3, camera: str = "cam-a") -> None:
+    for v in range(views):
+        gallery.add(
+            Embedding(
+                vector=view_of(identity, view=v),
+                identity=f"ship-{identity}",
+                camera_id=camera,
+                frame_id=v,
+            )
+        )
+
+
+# ---------------------------------------------------------------- every gallery must
+
+
+@pytest.mark.parametrize("name", GALLERY_NAMES)
+def test_a_query_finds_the_identity_it_belongs_to(name: str) -> None:
+    gallery = GALLERIES.build(name)
+    for identity in range(6):
+        enrol(gallery, identity)
+
+    result = gallery.query(view_of(3, view=99), top_k=3)
+
+    assert result.best is not None
+    assert result.best.identity == "ship-3"
+
+
+@pytest.mark.parametrize("name", GALLERY_NAMES)
+def test_an_empty_gallery_answers_nothing_rather_than_raising(name: str) -> None:
+    result = GALLERIES.build(name).query(view_of(0))
+
+    assert not result
+    assert result.best is None
+    assert len(result) == 0
+
+
+@pytest.mark.parametrize("name", GALLERY_NAMES)
+def test_the_threshold_decides_acceptance_not_ranking(name: str) -> None:
+    """A stranger must come back as "ranked but not accepted", not as the nearest ship.
+
+    Returning the best match unconditionally is how a re-identification system gives every
+    unknown vessel somebody else's identity.
+    """
+    gallery = GALLERIES.build(name)
+    for identity in range(5):
+        enrol(gallery, identity)
+
+    stranger = gallery.query(view_of(999), top_k=3, threshold=0.9)
+
+    assert stranger.best is not None, "it must still rank — the caller may want to see it"
+    assert stranger.accepted is None
+    assert not stranger
+
+
+@pytest.mark.parametrize("name", GALLERY_NAMES)
+def test_excluding_the_query_camera_removes_those_entries_from_the_ranking(name: str) -> None:
+    """The protocol's central rule. Without it a query matches its own camera's last frame,
+    which measures tracking and reports it as re-identification."""
+    gallery = GALLERIES.build(name)
+    gallery.add(Embedding(vector=view_of(1), identity="ship-1", camera_id="cam-a"))
+    gallery.add(Embedding(vector=view_of(2), identity="ship-2", camera_id="cam-b"))
+
+    unfiltered = gallery.query(view_of(1, view=5), top_k=2)
+    filtered = gallery.query(view_of(1, view=5), top_k=2, exclude_camera="cam-a")
+
+    assert unfiltered.best.identity == "ship-1"
+    assert filtered.best is not None
+    assert filtered.best.identity == "ship-2", "the only entry left"
+    assert all(m.camera_id != "cam-a" for m in filtered.matches)
+
+
+@pytest.mark.parametrize("name", GALLERY_NAMES)
+def test_excluding_every_camera_present_yields_nothing(name: str) -> None:
+    gallery = GALLERIES.build(name)
+    enrol(gallery, 1, camera="cam-a")
+
+    assert not gallery.query(view_of(1), exclude_camera="cam-a").matches
+
+
+@pytest.mark.parametrize("name", GALLERY_NAMES)
+def test_two_models_feeding_one_gallery_is_a_typed_error(name: str) -> None:
+    gallery = GALLERIES.build(name)
+    gallery.add(Embedding(vector=np.ones(32, np.float32), identity="a"))
+
+    with pytest.raises(DimensionMismatchError):
+        gallery.add(Embedding(vector=np.ones(64, np.float32), identity="b"))
+    with pytest.raises(DimensionMismatchError):
+        gallery.query(np.ones(64, np.float32))
+
+
+@pytest.mark.parametrize("name", GALLERY_NAMES)
+def test_an_unlabelled_vector_is_refused(name: str) -> None:
+    with pytest.raises(ConfigurationError, match="identity"):
+        GALLERIES.build(name).add(Embedding(vector=view_of(0)))
+
+
+@pytest.mark.parametrize("name", GALLERY_NAMES)
+def test_removing_an_identity_removes_all_of_it(name: str) -> None:
+    gallery = GALLERIES.build(name)
+    enrol(gallery, 1, views=4)
+    enrol(gallery, 2, views=4)
+
+    removed = gallery.remove_identity("ship-1")
+
+    assert removed >= 1
+    assert "ship-1" not in gallery.identities
+    assert gallery.query(view_of(1, view=7)).best.identity == "ship-2"
+    assert gallery.remove_identity("ship-1") == 0, "removing twice is not an error"
+
+
+@pytest.mark.parametrize("name", GALLERY_NAMES)
+def test_clear_leaves_it_reusable(name: str) -> None:
+    gallery = GALLERIES.build(name)
+    enrol(gallery, 1)
+    gallery.clear()
+
+    assert len(gallery) == 0
+    assert gallery.identities == ()
+
+    enrol(gallery, 2)
+    assert gallery.query(view_of(2, view=8)).best.identity == "ship-2"
+
+
+@pytest.mark.parametrize("name", GALLERY_NAMES)
+def test_top_k_is_ordered_best_first(name: str) -> None:
+    gallery = GALLERIES.build(name)
+    for identity in range(8):
+        enrol(gallery, identity, views=1)
+
+    matches = gallery.query(view_of(0, view=4), top_k=5).matches
+
+    assert len(matches) == 5
+    scores = [m.score for m in matches]
+    assert scores == sorted(scores, reverse=True)
+
+
+@pytest.mark.parametrize("name", GALLERY_NAMES)
+def test_top_k_larger_than_the_gallery_is_clamped_not_padded(name: str) -> None:
+    gallery = GALLERIES.build(name)
+    enrol(gallery, 1, views=2)
+
+    assert 0 < len(gallery.query(view_of(1), top_k=50).matches) <= 2
+
+
+# ---------------------------------------------------------------- FlatGallery specifics
+
+
+def test_per_identity_capacity_stops_one_ship_evicting_the_others() -> None:
+    """The starvation this project exists to prevent, one layer down.
+
+    A vessel that sits in view for an hour produces thousands of crops. Without a
+    per-identity cap it fills the gallery and every other identity is evicted — so the
+    system forgets all fifty ships it might have recognised in order to remember one it
+    is already tracking.
+    """
+    gallery = GALLERIES.build("flat", capacity=100, per_identity=4)
+    for identity in range(5):
+        enrol(gallery, identity, views=2)
+    for view in range(200):
+        gallery.add(
+            Embedding(vector=view_of(0, view=view), identity="ship-0", camera_id="cam-a")
+        )
+
+    assert gallery.count_for("ship-0") == 4
+    assert len(gallery) == 4 * 1 + 2 * 4
+    for identity in range(1, 5):
+        assert gallery.count_for(f"ship-{identity}") == 2
+        assert gallery.query(view_of(identity, view=77)).best.identity == f"ship-{identity}"
+
+
+def test_global_capacity_evicts_the_oldest_entry() -> None:
+    gallery = GALLERIES.build("flat", capacity=6, per_identity=6)
+    for identity in range(6):
+        gallery.add(Embedding(vector=view_of(identity), identity=f"ship-{identity}"))
+
+    gallery.add(Embedding(vector=view_of(90), identity="ship-90"))
+
+    assert len(gallery) == 6
+    assert "ship-0" not in gallery.identities, "the first one in is the first one out"
+    assert "ship-90" in gallery.identities
+
+
+def test_eviction_keeps_the_index_bookkeeping_straight() -> None:
+    """Rows are compacted by swapping the last live row into the hole, so every index in
+    the per-identity map has to be repaired. Get this wrong and a later query returns a
+    stale row — the right score attached to the wrong identity."""
+    gallery = GALLERIES.build("flat", capacity=50, per_identity=2)
+    for round_ in range(20):
+        for identity in range(5):
+            gallery.add(
+                Embedding(
+                    vector=view_of(identity, view=round_),
+                    identity=f"ship-{identity}",
+                    camera_id="cam-a",
+                )
+            )
+    gallery.remove_identity("ship-2")
+
+    assert len(gallery) == 4 * 2
+    assert sorted(gallery.identities) == ["ship-0", "ship-1", "ship-3", "ship-4"]
+    for identity in (0, 1, 3, 4):
+        assert gallery.query(view_of(identity, view=200)).best.identity == f"ship-{identity}"
+
+
+def test_flat_rejects_nonsense_capacities() -> None:
+    with pytest.raises(ConfigurationError):
+        GALLERIES.build("flat", capacity=0)
+    with pytest.raises(ConfigurationError):
+        GALLERIES.build("flat", per_identity=0)
+
+
+# ------------------------------------------------------------ CentroidGallery specifics
+
+
+def test_a_centroid_holds_one_vector_per_identity_however_many_views() -> None:
+    gallery = GALLERIES.build("centroid")
+    enrol(gallery, 1, views=50)
+
+    assert len(gallery) == 1
+    assert gallery.observations_for("ship-1") == 50
+
+
+def test_each_identity_gets_its_own_aggregator() -> None:
+    """A shared stateful aggregator would fold every identity into one accumulator and
+    hand the same vector back to all of them — so all four would score identically."""
+    gallery = GALLERIES.build("centroid", aggregator="mean")
+    for identity in range(4):
+        enrol(gallery, identity, views=5)
+
+    for identity in range(4):
+        result = gallery.query(view_of(identity, view=60), top_k=4)
+        assert result.best.identity == f"ship-{identity}"
+    scores = [gallery.query(view_of(0, view=61), top_k=4).matches[i].score for i in range(4)]
+    assert len(set(np.round(scores, 5))) == 4, "four identities must not share one vector"
+
+
+def test_a_bad_aggregator_name_fails_where_the_gallery_is_configured() -> None:
+    """Not on whichever camera happens to see the first ship."""
+    with pytest.raises(ConfigurationError, match="unknown aggregator"):
+        GALLERIES.build("centroid", aggregator="nope")
+
+
+def test_centroid_capacity_evicts_the_least_recently_seen() -> None:
+    gallery = GALLERIES.build("centroid", capacity=3)
+    for identity in range(3):
+        gallery.add(Embedding(vector=view_of(identity), identity=f"ship-{identity}"))
+    gallery.add(Embedding(vector=view_of(0, view=1), identity="ship-0"))  # refresh ship-0
+
+    gallery.add(Embedding(vector=view_of(9), identity="ship-9"))
+
+    assert len(gallery) == 3
+    assert "ship-1" not in gallery.identities, "least recently observed, not first enrolled"
+    assert "ship-0" in gallery.identities
