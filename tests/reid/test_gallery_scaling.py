@@ -9,6 +9,8 @@ only asks who the top match was.
 
 from __future__ import annotations
 
+import sys
+import threading
 import time
 
 import numpy as np
@@ -100,3 +102,123 @@ class TestGalleryQueryCostsAboutWhatItsGemmCosts:
         result = gallery.query(np.asarray(vectors[5], dtype=np.float32), top_k=4)
 
         assert result.best is not None and result.best.identity == "ship-5"
+
+
+def _elapsed_over_threads(call, *, threads: int, per_thread: int) -> float:
+    """Wall time for ``threads`` workers each making ``per_thread`` calls."""
+    barrier = threading.Barrier(threads)
+
+    def work() -> None:
+        barrier.wait()
+        for _ in range(per_thread):
+            call()
+
+    pool = [threading.Thread(target=work) for _ in range(threads)]
+    start = time.perf_counter()
+    for thread in pool:
+        thread.start()
+    for thread in pool:
+        thread.join()
+    return time.perf_counter() - start
+
+
+class TestASharedGalleryRunsItsSearchesConcurrently:
+    """:class:`BaseGallery` promises the server may call one gallery from several worker
+    threads. That promise is worth nothing if the lock is held across the matrix product:
+    the gemm is read-only and releases the GIL, so it is the one part of a query that *can*
+    overlap, and holding the lock over it turns eight threads into one.
+    """
+
+    DELAY = 0.02
+    THREADS = 4
+    PER_THREAD = 4
+
+    def _gallery(self, name: str):
+        gallery, vectors = _fill(name, identities=256, dim=64)
+        return gallery, np.asarray(vectors[11], dtype=np.float32)
+
+    @pytest.mark.parametrize("name", GALLERY_NAMES)
+    def test_the_matrix_product_is_not_serialised_by_the_lock(
+        self, name: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fixed sleep stands in for the gemm, deliberately.
+
+        Timing a real gemm here would measure the BLAS thread pool and whatever else is
+        running on the box, and would say nothing about the lock; a sleep releases the GIL
+        exactly as a gemm does and makes the claim — "these overlap" — decidable in
+        milliseconds whatever the machine is doing.
+        """
+        gallery, probe = self._gallery(name)
+        module = sys.modules[type(gallery).__module__]
+        real = module.cosine_similarity
+
+        def slow(*args: object, **kwargs: object) -> object:
+            time.sleep(self.DELAY)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(module, "cosine_similarity", slow)
+        call = lambda: gallery.query(probe, top_k=3, exclude_camera="cam-2")  # noqa: E731
+
+        alone = _elapsed_over_threads(call, threads=1, per_thread=self.PER_THREAD)
+        together = _elapsed_over_threads(call, threads=self.THREADS, per_thread=self.PER_THREAD)
+
+        # The harness has to be able to see the injected cost at all, or the test below
+        # would pass on a gallery that never called the patched function.
+        assert alone >= self.PER_THREAD * self.DELAY * 0.9, "the sleep is not on the path"
+        serialised = self.THREADS * self.PER_THREAD * self.DELAY
+        assert together < 0.5 * serialised, (
+            f"{name}: {self.THREADS} threads took {together * 1e3:.0f} ms where one thread "
+            f"takes {alone * 1e3:.0f} ms — the searches did not overlap"
+        )
+
+    @pytest.mark.parametrize("name", GALLERY_NAMES)
+    def test_a_concurrent_eviction_never_attaches_a_score_to_the_wrong_identity(
+        self, name: str
+    ) -> None:
+        """The price of letting the gemm run outside the lock, and the line that must hold.
+
+        A stale result is acceptable — a query may miss an identity added a microsecond ago.
+        A *mis-attributed* result is not: rows are compacted by swapping the last live row
+        into the hole, so a reader holding a row index while a writer evicts would otherwise
+        report the score of one identity under the name of another. Every identity here is a
+        distinct basis vector, so a score near 1 belongs to exactly one name and any
+        confusion is visible rather than plausible.
+        """
+        dim, capacity, pool = 64, 24, 64
+        gallery = GALLERIES.build(name, capacity=capacity)
+        basis = np.eye(pool, dim, dtype=np.float32)
+        for i in range(capacity):
+            gallery.add(Embedding(vector=basis[i], identity=f"ship-{i}", camera_id="cam-a"))
+
+        stop = threading.Event()
+        problems: list[str] = []
+
+        def churn() -> None:
+            rng = np.random.default_rng(3)
+            while not stop.is_set():
+                i = int(rng.integers(pool))
+                gallery.add(Embedding(vector=basis[i], identity=f"ship-{i}", camera_id="cam-a"))
+                if rng.random() < 0.25:
+                    gallery.remove_identity(f"ship-{int(rng.integers(pool))}")
+
+        def read() -> None:
+            rng = np.random.default_rng(7)
+            for _ in range(400):
+                i = int(rng.integers(pool))
+                for match in gallery.query(basis[i], top_k=3).matches:
+                    if match.score > 0.5 and match.identity != f"ship-{i}":
+                        problems.append(f"{match.identity} scored {match.score:.3f} for {i}")
+
+        writers = [threading.Thread(target=churn) for _ in range(2)]
+        readers = [threading.Thread(target=read) for _ in range(4)]
+        for thread in writers:
+            thread.start()
+        for thread in readers:
+            thread.start()
+        for thread in readers:
+            thread.join()
+        stop.set()
+        for thread in writers:
+            thread.join()
+
+        assert not problems, problems[:5]
