@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shipvision"
+version = "0.1.0"
+description = "Maritime computer-vision algorithms: detection, re-identification, tracking, MTMC"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "phucnp", email = "phuc.nguyen@moreh.com.vn" }]
+keywords = ["computer-vision", "detection", "tracking", "reid", "mtmc", "cuda", "tensorrt"]
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# The core is numpy alone, on purpose. Every algorithm here has a pure-numpy backend that
+# must import on a laptop with no GPU and no build, because that is the only way the fast
+# backends can be checked against a readable one — and the only way anyone can evaluate a
+# change to the association logic in the seconds it takes to run a test.
+dependencies = ["numpy>=1.24,<3"]
+
+[project.optional-dependencies]
+# scipy is here for linear_sum_assignment and hierarchical clustering. Hand-rolling either
+# would be slower, longer and less correct.
+solvers = ["scipy>=1.10"]
+torch = ["torch>=2.4"]
+tensorrt = ["tensorrt>=10.0", "cuda-python>=12.0"]
+vision = ["opencv-python-headless>=4.9"]
+tune = ["optuna>=3.6", "optuna-dashboard>=0.15"]
+eval = ["scipy>=1.10", "motmetrics>=1.4"]
+dev = [
+    "pytest>=8.2", "pytest-timeout>=2.3", "scipy>=1.10",
+    "black>=24.4", "ruff>=0.4", "isort>=5.13", "pre-commit>=3.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/osirisQdt2810/shipvision"
+
+# The package sits at the repository root; csrc/ is the C++/CUDA source tree and is not a
+# Python package.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["shipvision*"]
+
+[tool.black]
+line-length = 96
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 96
+target-version = "py310"
+extend-exclude = ["csrc"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "N", "UP", "B", "SIM", "RUF", "C4", "PERF", "PTH", "RET", "ARG", "ANN"]
+ignore = ["E501", "ANN401", "UP007", "UP045", "B008", "RET504", "PERF203", "ARG002", "B027"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**" = ["ANN", "ARG", "N802", "N803", "N806", "RUF012", "PERF", "SIM"]
+
+[tool.isort]
+profile = "black"
+line_length = 96
+src_paths = ["shipvision", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+timeout = 120
+markers = [
+    "gpu: needs a real accelerator",
+    "native: needs the compiled shipvision._C extension",
+    "slow: takes more than a few seconds",
+]
