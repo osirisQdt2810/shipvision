@@ -1,0 +1,304 @@
+"""Exact search over a bounded, densely-packed matrix."""
+
+from __future__ import annotations
+
+import threading
+from collections import defaultdict
+from collections.abc import Sequence
+
+import numpy as np
+
+from shipvision.errors import ConfigurationError, DimensionMismatchError
+from shipvision.registry import PYTHON
+from shipvision.reid.distance import cosine_similarity, normalize
+from shipvision.reid.gallery._cameras import NO_CAMERA, CameraCodec
+from shipvision.reid.gallery.base import GALLERIES, BaseGallery
+from shipvision.reid.types import Match, QueryResult
+from shipvision.types import Embedding
+
+__all__ = ["FlatGallery"]
+
+
+@GALLERIES.register("flat", backend=PYTHON, aliases=("exact",))
+class FlatGallery(BaseGallery):
+    """Every embedding kept, searched exhaustively with one matrix product.
+
+    Exhaustive is the right default at this scale, and the arithmetic says so: 50 000
+    entries of 512 floats is a 100 MB gemm per query — tens of microseconds on any modern
+    CPU, a rounding error next to the detector that produced the crop. An approximate index
+    earns its complexity somewhere past a million vectors; below that it buys latency that
+    was not the bottleneck and pays in recall that was.
+
+    **Bounded two ways, because one is not enough.** `capacity` caps the gallery;
+    `per_identity` caps how many vectors any one identity may hold. Without the second, one
+    ship that sits in view for an hour fills the gallery and evicts all fifty others — the
+    exact starvation this project exists to avoid, one layer up. Per-identity eviction runs
+    first, so a busy identity trims its own oldest before it can cost a neighbour a slot.
+
+    **Everything the query path touches is a numpy array, not a Python list.** Vectors are
+    a preallocated ``(capacity, dim)`` float32 matrix; camera, frame and insertion order are
+    parallel integer arrays. That is not tidiness. A camera filter written as a generator
+    over a list is an O(n) Python loop *per query* — about 5 ms at 50 000 entries, two
+    orders of magnitude more than the gemm it is filtering, and enough on its own to put
+    re-identification off the frame budget. Only the identity strings stay a list, because
+    only the k selected rows are ever read from it.
+
+    Camera ids are interned to those integer codes by a :class:`CameraCodec`, which is
+    bounded like everything else here: a deployment has as many camera ids as it has RTSP
+    streams, so an unbounded stream of distinct ones means a caller is minting an id per
+    frame, and ``clear`` resets the table rather than keeping the names of entries that are
+    gone.
+
+    Adding writes one row; evicting swaps the last live row into the hole. Swap-with-last
+    keeps the matrix contiguous for the gemm with no reallocation, at the cost of stable
+    entry indices — which is why :class:`Match` carries an index for immediate use rather
+    than as a durable handle.
+    """
+
+    def __init__(
+        self,
+        *,
+        capacity: int = 50_000,
+        per_identity: int = 16,
+        dim: int | None = None,
+    ) -> None:
+        if capacity <= 0:
+            raise ConfigurationError(f"capacity must be positive, got {capacity}")
+        if per_identity <= 0:
+            raise ConfigurationError(f"per_identity must be positive, got {per_identity}")
+        self.capacity = capacity
+        self.per_identity = per_identity
+
+        self._dim: int | None = None
+        self._vectors: np.ndarray | None = None
+        self._size = 0
+
+        self._identity: list[str] = []
+        self._camera_code = np.full(capacity, NO_CAMERA, dtype=np.int32)
+        self._frame = np.zeros(capacity, dtype=np.int64)
+        self._has_frame = np.zeros(capacity, dtype=bool)
+        self._sequence = np.zeros(capacity, dtype=np.int64)
+
+        self._cameras = CameraCodec()
+        self._by_identity: dict[str, list[int]] = defaultdict(list)
+        self._next_sequence = 0
+        self._lock = threading.RLock()
+
+        if dim is not None:
+            self._ensure_dim(dim)
+
+    # -- introspection ----------------------------------------------------------------
+
+    @property
+    def dim(self) -> int | None:
+        return self._dim
+
+    def __len__(self) -> int:
+        return self._size
+
+    @property
+    def identities(self) -> Sequence[str]:
+        with self._lock:
+            return tuple(self._by_identity)
+
+    def count_for(self, identity: str) -> int:
+        """How many vectors this identity currently holds."""
+        with self._lock:
+            return len(self._by_identity.get(identity, ()))
+
+    # -- writing ----------------------------------------------------------------------
+
+    def add(self, embedding: Embedding) -> int:
+        if embedding.identity is None:
+            raise ConfigurationError(
+                "a gallery entry needs an identity; an unlabelled vector is a query"
+            )
+        with self._lock:
+            self._ensure_dim(embedding.dim)
+            # Both of these can refuse the embedding, and both run before anything is
+            # written or evicted: a rejected add must leave the gallery exactly as it was.
+            # Normalising is also where a non-finite vector is stopped.
+            vector = normalize(embedding.vector)
+            code = self._cameras.code_for(embedding.camera_id)
+            self._make_room(embedding.identity)
+
+            index = self._size
+            assert self._vectors is not None
+            self._vectors[index] = vector
+            self._identity.append(embedding.identity)
+            self._camera_code[index] = code
+            self._has_frame[index] = embedding.frame_id is not None
+            self._frame[index] = embedding.frame_id or 0
+            self._sequence[index] = self._next_sequence
+            self._by_identity[embedding.identity].append(index)
+
+            self._next_sequence += 1
+            self._size += 1
+            return index
+
+    def remove_identity(self, identity: str) -> int:
+        with self._lock:
+            rows = self._by_identity.get(identity)
+            if not rows:
+                return 0
+            # Descending: a swap-with-last only ever moves a row to a *lower* index, so by
+            # taking the highest first this loop can never be handed a row it already
+            # visited under a new number.
+            doomed = sorted(rows, reverse=True)
+            for index in doomed:
+                self._drop(index)
+            return len(doomed)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._size = 0
+            self._identity.clear()
+            self._by_identity.clear()
+            self._camera_code[:] = NO_CAMERA
+            self._has_frame[:] = False
+            # The name table is derived state; a gallery that has forgotten every entry must
+            # not still be holding the names those entries came with.
+            self._cameras.clear()
+
+    # -- reading ----------------------------------------------------------------------
+
+    def query(
+        self,
+        vector: np.ndarray,
+        *,
+        top_k: int = 1,
+        threshold: float | None = None,
+        exclude_camera: str | None = None,
+    ) -> QueryResult:
+        """Rank the gallery against one vector. See :meth:`BaseGallery.query`.
+
+        The lock is held twice and briefly — once to take a snapshot, once to read the
+        winning rows back — and **not** across the matrix product. That is the whole point:
+        the gemm is read-only and BLAS releases the GIL for it, so it is the one part of a
+        query that several worker threads can genuinely run at the same time, and holding
+        the lock over it makes eight threads perform like one. Measured at capacity 20 000
+        and dim 512 with the lock held throughout, throughput was flat from one thread to
+        eight.
+
+        What the snapshot promises, exactly:
+
+        * **Staleness is allowed.** An entry added while the gemm ran may be missing from
+          the result. A frame-rate query is a snapshot of the past regardless.
+        * **Mis-attribution is not.** Rows are compacted by swapping the last live row into
+          the hole, so a row index taken before the gemm can be a *different entry* after
+          it. Each row's insertion sequence is that row's occupant stamp — nothing ever
+          rewrites a live row in place, and sequences are never reused — so a winning row
+          whose stamp moved is dropped from the result rather than reported. A caller can
+          therefore get fewer than ``top_k`` matches under heavy churn, but never a score
+          belonging to one identity under the name of another.
+
+        The snapshot copies only the stamp column: 8 bytes per entry, one memcpy, about
+        20 us at 50 000 entries against a gemm two orders of magnitude larger.
+        """
+        if top_k <= 0:
+            raise ConfigurationError(f"top_k must be positive, got {top_k}")
+        probe = normalize(np.asarray(vector, dtype=np.float32).reshape(1, -1))
+
+        with self._lock:
+            if self._size == 0 or self._vectors is None:
+                return QueryResult(matches=())
+            if probe.shape[1] != self._dim:
+                raise DimensionMismatchError(
+                    f"query is {probe.shape[1]}-d, gallery is {self._dim}-d"
+                )
+            size = self._size
+            vectors = self._vectors[:size]
+            codes = self._camera_code[:size]
+            stamps = self._sequence[:size].copy()
+            exclude = self._cameras.lookup(exclude_camera)
+
+        scores = cosine_similarity(probe, vectors)[0]
+
+        eligible = size
+        if exclude is not None:
+            same = codes == exclude
+            # -inf rather than deletion: row indices stay aligned with the metadata arrays,
+            # and compacting per query would cost more than the search.
+            scores = np.where(same, -np.inf, scores)
+            eligible -= int(same.sum())
+        if eligible <= 0:
+            return QueryResult(matches=())
+
+        k = min(top_k, eligible)
+        # argpartition is O(n) where argsort is O(n log n); only the k it selects get
+        # sorted. At 50 000 entries queried at frame rate that is the difference
+        # between the search being invisible and being in the profile.
+        top = np.argpartition(-scores, k - 1)[:k]
+        top = top[np.argsort(-scores[top], kind="stable")]
+
+        with self._lock:
+            # Only k rows are read back, so this second acquisition is O(top_k), not O(n).
+            # The predicates are the mis-attribution guard described above.
+            matches = tuple(
+                Match(
+                    identity=self._identity[row],
+                    score=float(scores[row]),
+                    entry_index=row,
+                    camera_id=self._cameras.name_for(int(self._camera_code[row])),
+                    frame_id=int(self._frame[row]) if self._has_frame[row] else None,
+                )
+                for row in (int(i) for i in top)
+                if row < self._size
+                and self._sequence[row] == stamps[row]
+                and np.isfinite(scores[row])
+                and (exclude is None or self._camera_code[row] != exclude)
+            )
+
+        if not matches:
+            return QueryResult(matches=())
+        accepted = matches[0] if threshold is None or matches[0].score >= threshold else None
+        return QueryResult(matches=matches, accepted=accepted)
+
+    # -- internals --------------------------------------------------------------------
+
+    def _ensure_dim(self, dim: int) -> None:
+        if self._dim is None:
+            self._dim = dim
+            self._vectors = np.zeros((self.capacity, dim), dtype=np.float32)
+        elif dim != self._dim:
+            raise DimensionMismatchError(
+                f"gallery holds {self._dim}-d vectors, got a {dim}-d one; two models are "
+                f"feeding one gallery"
+            )
+
+    def _make_room(self, identity: str) -> None:
+        """Evict until this identity may take one more row."""
+        while len(self._by_identity[identity]) >= self.per_identity:
+            rows = self._by_identity[identity]
+            self._drop(min(rows, key=lambda i: int(self._sequence[i])))
+        while self._size >= self.capacity:
+            # A C-speed scan of an int64 array, not a Python min over a list. It is O(n),
+            # and it runs only once the gallery is full; gallery writes are per *track*
+            # rather than per crop — hundreds a second, not the 15 000 crops/s the server
+            # ingests — so tens of microseconds here stays well inside the budget.
+            self._drop(int(np.argmin(self._sequence[: self._size])))
+
+    def _drop(self, index: int) -> None:
+        """Remove one row, swapping the last live row into its place."""
+        assert self._vectors is not None
+        last = self._size - 1
+        victim = self._identity[index]
+        self._by_identity[victim].remove(index)
+
+        if index != last:
+            self._vectors[index] = self._vectors[last]
+            moved = self._identity[last]
+            self._identity[index] = moved
+            self._camera_code[index] = self._camera_code[last]
+            self._frame[index] = self._frame[last]
+            self._has_frame[index] = self._has_frame[last]
+            self._sequence[index] = self._sequence[last]
+            rows = self._by_identity[moved]
+            rows[rows.index(last)] = index
+
+        self._identity.pop()
+        self._camera_code[last] = NO_CAMERA
+        self._has_frame[last] = False
+        self._size -= 1
+        if not self._by_identity[victim]:
+            del self._by_identity[victim]

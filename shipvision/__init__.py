@@ -69,6 +69,9 @@ __version__ = "0.1.0"
 _REGISTRY_HOMES: dict[str, str] = {
     "DETECTORS": "shipvision.detection",
     "IMGPROC": "shipvision.imgproc",
+    "EXTRACTORS": "shipvision.reid",
+    "GALLERIES": "shipvision.reid",
+    "AGGREGATORS": "shipvision.reid",
     # Deliberately empty here. Every entry must resolve — `tests/test_package.py` reads this
     # table rather than keeping its own list — so a family declared before it exists fails the
     # suite instead of waiting to fail a user. Each package therefore adds its own line when
@@ -100,7 +103,10 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "AGGREGATORS",
     "DETECTORS",
+    "EXTRACTORS",
+    "GALLERIES",
     "IMGPROC",
     "NATIVE",
     "PYTHON",
