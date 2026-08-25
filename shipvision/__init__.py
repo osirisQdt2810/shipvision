@@ -72,6 +72,8 @@ _REGISTRY_HOMES: dict[str, str] = {
     "EXTRACTORS": "shipvision.reid",
     "GALLERIES": "shipvision.reid",
     "AGGREGATORS": "shipvision.reid",
+    "TRACKERS": "shipvision.tracking",
+    "CAMERA_MOTION": "shipvision.tracking",
     # Deliberately empty here. Every entry must resolve — `tests/test_package.py` reads this
     # table rather than keeping its own list — so a family declared before it exists fails the
     # suite instead of waiting to fail a user. Each package therefore adds its own line when
@@ -108,10 +110,12 @@ __all__ = [
     "EXTRACTORS",
     "GALLERIES",
     "IMGPROC",
+    "CAMERA_MOTION",
     "NATIVE",
     "PYTHON",
     "TENSORRT",
     "TORCH",
+    "TRACKERS",
     "BackendUnavailableError",
     "ConfigurationError",
     "Detection",
