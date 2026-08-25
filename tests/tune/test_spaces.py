@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from shipvision.errors import ConfigurationError
-from shipvision.tracking import TRACKERS
+from shipvision.mot import TRACKERS
 from shipvision.tune.spaces import (
     APPEARANCE_PARAMETERS,
     CategoricalChoice,

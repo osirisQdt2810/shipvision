@@ -26,7 +26,7 @@ from shipvision.errors import ConfigurationError
 from shipvision.eval.association import align
 from shipvision.eval.metrics import SequenceResult, clear_counts, hota_counts, identity_counts
 from shipvision.eval.sequence import EvaluationCase, ObjectFrame, TrackSequence
-from shipvision.tracking.base import BaseTracker
+from shipvision.mot.base import BaseTracker
 
 __all__ = ["evaluate", "evaluate_all", "run", "score"]
 

@@ -6,7 +6,7 @@ produce, it will not be produced — so the tracker that shipped first wins by d
 than by evidence. Everything here runs on boxes alone, in seconds, with no device::
 
     from shipvision.eval import evaluate, format_table, load_case
-    from shipvision.tracking import TRACKERS
+    from shipvision.mot import TRACKERS
 
     case = load_case("data/mot17/train/MOT17-09-FRCNN")
     print(format_table([evaluate(TRACKERS.build("bytetrack"), case)]))

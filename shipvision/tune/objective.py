@@ -35,7 +35,7 @@ from shipvision.errors import ConfigurationError
 from shipvision.eval.metrics import SequenceResult, combine
 from shipvision.eval.runner import evaluate
 from shipvision.eval.sequence import EvaluationCase
-from shipvision.tracking import TRACKERS
+from shipvision.mot import TRACKERS
 from shipvision.tune.spaces import SearchSpace, Suggester, space_for
 
 __all__ = ["DIRECTIONS", "Objective", "direction_of", "midpoint_suggester"]

@@ -20,7 +20,7 @@ import pytest
 
 from shipvision.eval import evaluate, format_table, load_case
 from shipvision.eval.datasets import discover_sequences
-from shipvision.tracking import TRACKERS
+from shipvision.mot import TRACKERS
 
 pytestmark = pytest.mark.slow
 
