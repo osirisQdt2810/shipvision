@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import Generic, TypeVar
 
-from shipvision.errors import ConfigurationError
+from shipvision.errors import BackendUnavailableError, ConfigurationError
 
 __all__ = ["NATIVE", "PYTHON", "TENSORRT", "TORCH", "Registry"]
 
@@ -179,7 +179,7 @@ class Registry(Generic[T]):
             chosen = backend
         else:
             raise ConfigurationError(
-                f"{self.family} {resolved!r} has no {backend!r} backend; it has " f"{available}"
+                f"{self.family} {resolved!r} has no {backend!r} backend; it has {available}"
             )
 
         key = (resolved, chosen)
@@ -198,12 +198,50 @@ class Registry(Generic[T]):
         return entry
 
     def build(self, name: str, *, backend: str | None = None, **kwargs: object) -> T:
-        """Instantiate. Unknown keyword arguments raise from the constructor.
+        """Instantiate, resolving the backend if one is not named.
 
-        Deliberately not swallowed: a typo in a config key that is silently dropped means
-        the algorithm runs with a default nobody chose, and the run looks successful.
+        Unknown keyword arguments raise from the constructor. Deliberately not swallowed: a
+        typo in a config key that is silently dropped means the algorithm runs with a default
+        nobody chose, and the run looks successful.
+
+        **Registration is not availability, and an unpinned build has to act on that.** A
+        compiled backend registers on a machine with no build, because making registration
+        conditional would mean :meth:`backends` answering differently per host and an error
+        message losing the ability to say "native exists, it just is not built here". Only the
+        constructor knows the truth, so an unpinned build walks the preference order and treats
+        :class:`~shipvision.errors.BackendUnavailableError` as "try the next one" — which is
+        what makes "fastest available, numpy as the floor" true at run time rather than only at
+        import time. It is what every family's documented entry point already promises:
+        ``TRACKERS.build("bytetrack")`` must return a working tracker on a laptop.
+
+        **Naming a backend disables the fallback.** A deployment that asked for ``native`` and
+        silently got numpy would be a large throughput regression reported as a successful
+        start-up, so being told is the only acceptable behaviour.
+
+        Raises:
+            ConfigurationError: no such algorithm, or no such backend for it.
+            BackendUnavailableError: an explicitly named backend cannot be built here, or —
+                when none was named — nothing registered under ``name`` could be.
         """
-        return self.get(name, backend)(**kwargs)  # type: ignore[call-arg]
+        if backend is not None:
+            return self.get(name, backend)(**kwargs)  # type: ignore[call-arg]
+
+        candidates = self.backends(name)
+        if not candidates:
+            # Delegates so there is one spelling of "unknown <family> <name>; available: [...]",
+            # which is a string operators grep for.
+            self.get(name)
+
+        failures: list[str] = []
+        for candidate in candidates:
+            try:
+                return self.get(name, candidate)(**kwargs)  # type: ignore[call-arg]
+            except BackendUnavailableError as exc:
+                failures.append(f"{candidate}: {exc}")
+        raise BackendUnavailableError(
+            f"no usable backend for {self.family} {name!r} on this machine. Tried "
+            + "; ".join(failures)
+        )
 
     def __contains__(self, name: object) -> bool:
         return isinstance(name, str) and bool(self.backends(name))
