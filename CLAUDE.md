@@ -86,7 +86,7 @@ shipvision/            the Python package, at the repository root
 ├── imgproc/           @IMGPROC   letterbox, crop, colour, normalise, NMS
 ├── detection/         @DETECTORS yolo26 (tensorrt / torch), postprocess
 ├── reid/              @EXTRACTORS @GALLERIES @AGGREGATORS + metrics, re-ranking
-├── tracking/          @TRACKERS  sort, bytetrack, botsort, ocsort, deepsortv2
+├── mot/               @TRACKERS  sort, bytetrack, botsort, ocsort, deepsortv2 — one package per algorithm
 ├── mtmc/              @MTMC      matrix builders, clustering, topology, global id
 ├── tune/              Optuna search spaces + objectives
 └── eval/              HOTA/MOTA/IDF1 for MOT and MTMC; CMC/mAP for re-ID

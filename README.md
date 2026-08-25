@@ -26,7 +26,7 @@ cmake -S . -B build && cmake --build build -j   # the compiled shipvision._C
 
 ```python
 from shipvision import Detection, Detections, FrameTag
-from shipvision.tracking import TRACKERS
+from shipvision.mot import TRACKERS
 
 tracker = TRACKERS.build("bytetrack", track_threshold=0.5)
 
@@ -61,7 +61,7 @@ on a machine with no build.
 | `imgproc/` | letterbox, crop, colour conversion, normalisation, NMS — fused into one pass over the pixels |
 | `detection/` | YOLO26 detection and segmentation, TensorRT and torch backends, postprocessing |
 | `reid/` | embedding extractors, bounded galleries, feature aggregation, CMC/mAP, k-reciprocal re-ranking |
-| `tracking/` | SORT, ByteTrack, BoT-SORT, OC-SORT, DeepSORTv2 over one shared track pool |
+| `mot/` | SORT, ByteTrack, BoT-SORT, OC-SORT, DeepSORTv2 over one shared track pool, one package per algorithm (`tracking/` is a deprecated alias) |
 | `mtmc/` | appearance + ground-plane matrix builders, agglomerative clustering, camera topology, global-id assignment with TTL |
 | `tune/` | Optuna search spaces and objectives — a tracker's thresholds are an empirical question |
 | `eval/` | HOTA/MOTA/IDF1 for MOT and MTMC, CMC/mAP for re-ID |
