@@ -1,0 +1,69 @@
+# Pre-commit hooks — run on STAGED files at every `git commit`.
+# Install once:  pre-commit install
+# Run manually:  pre-commit run              # staged files
+#                pre-commit run --all-files  # whole repo
+#
+# CI runs `pre-commit run --from-ref <base> --to-ref HEAD`, so this file is not advisory:
+# without it the lint job fails with `InvalidConfigError`, which is how its absence was
+# discovered rather than by anyone noticing the hooks were not running.
+
+# Build output, the venv, and the compiled extension are not ours to format.
+exclude: |
+  (?x)^(
+      build/
+    | dist/
+    | \.venv/
+    | .*\.so$
+  )
+
+default_language_version:
+  python: python3
+
+repos:
+  # General hygiene + config validators.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.md$'            # trailing double-space is a hard line break in markdown
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+      - id: check-added-large-files
+        args: [--maxkb=512]         # an engine or a weight file must never be committed
+      - id: detect-private-key
+      - id: check-executables-have-shebangs
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: [--profile, black, --line-length, "96"]
+
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        args: [--line-length, "96"]
+
+  # Pinned to the version the project actually develops against. A hook older than the local
+  # ruff rejects rule selectors that do not exist yet — `UP045` was split out of `UP007` in a
+  # later release, and an unknown selector in `ignore` is a hard parse error, not a warning.
+  # So the pin is not cosmetic: a stale one fails the lint job on a valid config.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+
+  # C++/CUDA. Pinned to the same version CI uses, because clang-format's output changes
+  # between releases and a version skew turns every commit into a reformat war.
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.8
+    hooks:
+      - id: clang-format
+        types_or: [c, c++, cuda]
+        args: [--style=file]

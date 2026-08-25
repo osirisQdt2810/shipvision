@@ -69,8 +69,9 @@ inner loops where a Python call per track is the frame budget. Nothing else.
 - **Nothing grows without bound.** Galleries, track pools and MTMC global-id maps all take a
   capacity and state what they evict. A process here runs for weeks.
 - **C++: `gpu*` aliases from `core/platform.hpp` only.** A raw `cudaMalloc` breaks the ROCm
-  build silently; there is a guard test. Release the GIL around launches — a library
-  transforms data, it is not where GIL policy belongs.
+  build silently — `tests/test_architecture.py::TestVendorApiBoundary` is the guard, and it
+  strips comments first so prose explaining *why* an alias exists is allowed. Release the GIL
+  around launches — a library transforms data, it is not where GIL policy belongs.
 - **C++ style** (`.clang-format`): `NamespaceIndentation: All`, `IndentAccessModifiers: true`,
   `PointerAlignment: Left` — so `float* dst`, not `float *dst`.
 - English for all documentation, comments and commit messages.
@@ -129,6 +130,25 @@ pytest                    # offline tier: numpy backends, no GPU, no build, unde
 pytest -m native          # the compiled backends and the parity tests
 pytest -m gpu             # real devices
 ```
+
+**Tests are organised into classes, never bare module-level functions.** One class per
+coherent claim, so the class name and the method name read as a sentence together:
+
+```python
+class TestLetterboxInversion:
+    """A box decoded from network space must land back where it started in image pixels."""
+
+    def test_it_round_trips_at_a_non_integer_scale(self) -> None: ...
+    def test_an_odd_total_pad_splits_bottom_and_right(self) -> None: ...
+```
+
+Two collection rules that bite: the class name **must** start with `Test` or pytest does not
+collect it at all — a silently-uncollected file is worse than no file — and the class must
+not define `__init__`, or pytest skips it with a warning. Use fixtures or `setup_method` for
+shared state. Parametrize, fixtures and markers all work unchanged on methods, and
+`conftest.py` fixtures are still injected as method arguments. After any restructuring,
+check the collected **count** is unchanged; a drop means a class was misnamed and its tests
+vanished quietly.
 
 The offline tier must stay green **and stay GPU-free**. Deselecting a marker is not the same
 guarantee as having no device: an unmarked test can take a CUDA path by accident, pass on a

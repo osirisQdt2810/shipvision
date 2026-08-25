@@ -25,8 +25,8 @@ while ``build("bytetrack", backend="python")`` pins it.
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar
 from collections.abc import Callable, Iterable
+from typing import Generic, TypeVar
 
 from shipvision.errors import ConfigurationError
 
@@ -101,18 +101,56 @@ class Registry(Generic[T]):
         self._lazy[(name, backend)] = target
 
     def _claim(self, name: str, backend: str, aliases: Iterable[str]) -> None:
+        """Refuse every way one registration can make another unreachable.
+
+        Three collisions, and the middle one is the reason this method is worth reading.
+
+        The alias table is consulted *before* the name table by both :meth:`get` and
+        :meth:`backends`, so an alias that happens to spell a real algorithm's name silently
+        outranks it. Registering ``botsort`` with ``aliases=("sort",)`` and then registering
+        ``sort`` used to be accepted: ``names()`` listed both, and ``build("sort")`` returned
+        BoT-SORT. The shadowed algorithm is registered, listed, and reachable by nothing. A
+        config saying ``tracker: sort`` then either raises ``TypeError`` on a keyword the other
+        constructor does not take, or — where the two happen to overlap — runs the wrong
+        tracker, and the A/B measurement this registry exists to enable compares an algorithm
+        against itself. Which of the two happens is decided by import order.
+
+        The guard is symmetric, so it does not matter which arrives first: an alias may not
+        shadow a registered name, and a name may not be registered over an existing alias.
+
+        Nothing is written until every check has passed. The previous version bound each alias
+        as it went, so a registration rejected on its third alias left its first two pointing
+        at a class that is not registered — the registry ending up in a state no single call
+        could have produced.
+        """
         key = (name, backend)
         if key in self._entries or key in self._lazy:
             raise ConfigurationError(
                 f"{self.family} {name!r} is already registered for backend {backend!r}"
             )
+        owner = self._aliases.get(name)
+        if owner is not None and owner != name:
+            raise ConfigurationError(
+                f"cannot register {self.family} {name!r}: that name is already an alias for "
+                f"{owner!r}, and the alias table is consulted first — this {self.family} "
+                f"would be listed by names() and reachable by nothing"
+            )
+        registered = {n for n, _ in (*self._entries, *self._lazy)}
+        claimed: dict[str, str] = {}
         for alias in aliases:
-            existing = self._aliases.get(alias)
+            existing = self._aliases.get(alias, claimed.get(alias))
             if existing is not None and existing != name:
                 raise ConfigurationError(
                     f"alias {alias!r} already points at {self.family} {existing!r}"
                 )
-            self._aliases[alias] = name
+            if alias in registered and alias != name:
+                raise ConfigurationError(
+                    f"alias {alias!r} would shadow the {self.family} of that name: lookups "
+                    f"consult aliases first, so {alias!r} would resolve to {name!r} and the "
+                    f"real {alias!r} would be unreachable"
+                )
+            claimed[alias] = name
+        self._aliases.update(claimed)
 
     # -- lookup -----------------------------------------------------------------------
 
@@ -147,7 +185,16 @@ class Registry(Generic[T]):
         key = (resolved, chosen)
         entry = self._entries.get(key)
         if entry is None:
-            entry = self._entries[key] = _import_target(self._lazy[key])
+            entry = _import_target(self._lazy[key])
+            # Stamp the same attributes `register` stamps. The decorator cannot have done it
+            # — the class did not exist yet — and without this a lazily-registered class
+            # reports whatever `name`/`backend` it happens to inherit, so a log line says
+            # "python" for a TensorRT extractor. Doing it here rather than asking each lazy
+            # class to declare them keeps the two registration paths indistinguishable to
+            # everything downstream.
+            entry.name = resolved  # type: ignore[attr-defined]
+            entry.backend = chosen  # type: ignore[attr-defined]
+            self._entries[key] = entry
         return entry
 
     def build(self, name: str, *, backend: str | None = None, **kwargs: object) -> T:

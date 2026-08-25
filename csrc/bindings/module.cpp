@@ -32,6 +32,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -56,13 +57,31 @@ namespace {
     }
     NormalizeParams params;
     for (int i = 0; i < 3; ++i) {
-      if (std[i] == 0.f)
-        throw std::invalid_argument("normalisation std must be non-zero");
+      // Finite and positive, not merely non-zero. A negative divisor inverts that channel and
+      // a NaN makes the whole tensor NaN, and neither raises anywhere downstream — the model
+      // simply gets worse. Checked here as well as in Python because these entry points are
+      // reachable without it.
+      if (!std::isfinite(std[i]) || std[i] <= 0.f)
+        throw std::invalid_argument("normalisation std must be finite and positive");
+      if (!std::isfinite(mean[i]))
+        throw std::invalid_argument("normalisation mean must be finite");
       params.mean[i] = mean[i];
       params.std[i] = std[i];
     }
     params.swap_rb = swap_rb;
     return params;
+  }
+
+  /// A whole letterbox fill level in [0, 255].
+  ///
+  /// `static_cast<unsigned char>` is silent: 256 fills with 0 and -1 fills with 255, so a
+  /// config typo produced white bars on this path and the requested value on the numpy one,
+  /// with nothing to say the two disagreed.
+  unsigned char checked_pad_value(int pad_value) {
+    if (pad_value < 0 || pad_value > 255) {
+      throw std::invalid_argument("pad_value must be in [0, 255]");
+    }
+    return static_cast<unsigned char>(pad_value);
   }
 
   /// One source frame, resolved to a raw pointer and its letterbox geometry.
@@ -110,16 +129,18 @@ namespace {
         auto scales = py::array_t<float>(static_cast<py::ssize_t>(images.size()));
         auto pads = py::array_t<float>(
             {static_cast<py::ssize_t>(images.size()), static_cast<py::ssize_t>(2)});
+        auto extents = py::array_t<int>(
+            {static_cast<py::ssize_t>(images.size()), static_cast<py::ssize_t>(2)});
         const auto params = make_params(mean, std, swap_rb);
+        const auto fill = checked_pad_value(pad_value);
         const auto plans = plan_frames(images, dst_h, dst_w, out_bytes, scales.mutable_data(),
-                                       pads.mutable_data());
+                                       pads.mutable_data(), extents.mutable_data());
         {
           py::gil_scoped_release release;
-          run_letterbox(plans, reinterpret_cast<float*>(out_ptr), dst_h, dst_w, params,
-                        static_cast<unsigned char>(pad_value),
+          run_letterbox(plans, reinterpret_cast<float*>(out_ptr), dst_h, dst_w, params, fill,
                         reinterpret_cast<gpuStream_t>(stream_handle));
         }
-        return py::make_tuple(scales, pads);
+        return py::make_tuple(scales, pads, extents);
       }
 
       /// Preprocess and bring the result back to the host. Convenience and parity testing.
@@ -135,19 +156,21 @@ namespace {
         auto scales = py::array_t<float>(static_cast<py::ssize_t>(images.size()));
         auto pads = py::array_t<float>(
             {static_cast<py::ssize_t>(images.size()), static_cast<py::ssize_t>(2)});
+        auto extents = py::array_t<int>(
+            {static_cast<py::ssize_t>(images.size()), static_cast<py::ssize_t>(2)});
         const auto params = make_params(mean, std, swap_rb);
+        const auto fill = checked_pad_value(pad_value);
         const auto plans = plan_frames(images, dst_h, dst_w, bytes, scales.mutable_data(),
-                                       pads.mutable_data());
+                                       pads.mutable_data(), extents.mutable_data());
         auto* host_out = result.mutable_data();
         {
           py::gil_scoped_release release;
           const auto stream = reinterpret_cast<gpuStream_t>(stream_handle);
           auto* device_out = static_cast<float*>(output_.reserve(bytes));
-          run_letterbox(plans, device_out, dst_h, dst_w, params,
-                        static_cast<unsigned char>(pad_value), stream);
+          run_letterbox(plans, device_out, dst_h, dst_w, params, fill, stream);
           download(device_out, host_out, bytes, stream);
         }
-        return py::make_tuple(result, scales, pads);
+        return py::make_tuple(result, scales, pads, extents);
       }
 
       // -- crops -----------------------------------------------------------------------
@@ -233,9 +256,17 @@ namespace {
       /// kernel: it keeps the kernel free of divergence, and the scales and pads have to
       /// reach numpy anyway so that post-processing can invert the letterbox with exactly
       /// the numbers that applied it.
+      ///
+      /// `extents_out` carries `out_h` and `out_w` back for the same reason the scales go
+      /// back, and it is not redundant with them: `out_h` is what the kernel divides by, so
+      /// it is the number that decides the sampling ratio, and Python re-derives it from the
+      /// scale rather than being told. Those two derivations can disagree by a pixel while
+      /// the scale and the pad both still match — `pad = (T - r) / 2` is the same for `r` and
+      /// `r + 1` whenever `T - r` is even — and then every row of the image is sampled from
+      /// the wrong ratio with the drift guard none the wiser.
       std::vector<FramePlan> plan_frames(const std::vector<U8Array>& images, int dst_h,
                                          int dst_w, size_t out_bytes, float* scales_out,
-                                         float* pads_out) const {
+                                         float* pads_out, int* extents_out) const {
         if (images.empty())
           throw std::invalid_argument("letterbox needs at least one image");
         const size_t required =
@@ -253,6 +284,17 @@ namespace {
           }
           const int h = static_cast<int>(info.shape[0]);
           const int w = static_cast<int>(info.shape[1]);
+          // Both extents must be positive, and this is not a redundant check on top of the
+          // Python one. `out_h` below floors at 1, so a zero-row frame still gets a row of
+          // output, the kernel samples `src_y = -0.5`, and `sample_bilinear` clamps its high
+          // tap to `min(y0 + 1, h - 1) = -1` — a read before the staging allocation at batch
+          // index 0, and a read of the *previous frame's* pixels at any higher index. The
+          // first raises cudaErrorIllegalAddress, which is sticky and kills the worker for
+          // the life of the process; the second is silent. This entry point is reachable from
+          // any caller, so the guard cannot live only in Python.
+          if (h <= 0 || w <= 0) {
+            throw std::invalid_argument("each image extent must be positive");
+          }
           const float scale =
               std::min(static_cast<float>(dst_h) / h, static_cast<float>(dst_w) / w);
           const int out_h = std::max(1, static_cast<int>(lroundf(h * scale)));
@@ -265,6 +307,8 @@ namespace {
           scales_out[i] = scale;
           pads_out[i * 2 + 0] = static_cast<float>(pad_x);
           pads_out[i * 2 + 1] = static_cast<float>(pad_y);
+          extents_out[i * 2 + 0] = out_h;
+          extents_out[i * 2 + 1] = out_w;
         }
         return plans;
       }
@@ -286,6 +330,9 @@ namespace {
         }
         if (box_info.ndim != 2 || box_info.shape[1] != 4) {
           throw std::invalid_argument("boxes must be (N, 4) float32");
+        }
+        if (image_info.shape[0] <= 0 || image_info.shape[1] <= 0) {
+          throw std::invalid_argument("each image extent must be positive");
         }
         const int num_boxes = static_cast<int>(box_info.shape[0]);
         const size_t required =
@@ -334,17 +381,17 @@ namespace {
         // One transfer, not one per frame: eight 6 MB copies cost eight driver round
         // trips and eight chances to serialise the stream.
         shipvision::check(gpuMemcpyAsync(device, pinned, total, gpuMemcpyHostToDevice, stream),
-                         "upload frames");
+                          "upload frames");
 
         auto* device_views =
             static_cast<ImageView*>(slot.views().reserve(views_.size() * sizeof(ImageView)));
         shipvision::check(gpuMemcpyAsync(device_views, views_.data(),
-                                        views_.size() * sizeof(ImageView),
-                                        gpuMemcpyHostToDevice, stream),
-                         "upload image views");
+                                         views_.size() * sizeof(ImageView),
+                                         gpuMemcpyHostToDevice, stream),
+                          "upload image views");
 
         shipvision::letterbox_batch(device_views, static_cast<int>(plans.size()), out, dst_h,
-                                   dst_w, params, pad_value, stream);
+                                    dst_w, params, pad_value, stream);
         // Not a synchronise: it marks when this slot's buffers stop being read, so the
         // rotation can reuse them without anybody waiting here.
         slot.record(stream);
@@ -371,12 +418,12 @@ namespace {
 
         auto* device = static_cast<unsigned char*>(slot.frames().reserve(packed));
         shipvision::check(gpuMemcpyAsync(device, pinned, packed, gpuMemcpyHostToDevice, stream),
-                         "upload frame and boxes");
+                          "upload frame and boxes");
 
         const ImageView view{device, plan.height, plan.width,  1.f,
                              0,      0,           plan.height, plan.width};
         shipvision::crop_batch(view, reinterpret_cast<const float*>(device + box_offset),
-                              plan.num_boxes, out, dst_h, dst_w, params, stream);
+                               plan.num_boxes, out, dst_h, dst_w, params, stream);
         slot.record(stream);
       }
 
@@ -395,7 +442,7 @@ namespace {
             nms_mask_.reserve(mask_words * sizeof(unsigned long long)));
 
         return shipvision::nms(boxes, scores, n, iou_threshold, score_threshold, max_output,
-                              scratch, stream);
+                               scratch, stream);
       }
 
       /// Device to host, through pinned memory.
@@ -416,7 +463,7 @@ namespace {
       }
 
       int device_index_;
-      StagingRing ring_;                ///< rotated per call, so reuse never races a live copy
+      StagingRing ring_;                 ///< rotated per call, so reuse never races a live copy
       shipvision::DeviceScratch output_; ///< host-returning entry points only
       shipvision::DeviceScratch nms_boxes_; ///< score-sorted boxes for one NMS call
       shipvision::DeviceScratch nms_mask_;  ///< the (box, box) overlap bitmask
@@ -450,13 +497,14 @@ PYBIND11_MODULE(_C, m) {
       .def("letterbox_batch", &ImageOps::letterbox_batch, py::arg("images"), py::arg("dst_h"),
            py::arg("dst_w"), py::arg("mean"), py::arg("std"), py::arg("swap_rb"),
            py::arg("pad_value") = 114, py::arg("stream") = 0,
-           "Fused resize+pad+convert+normalise+NCHW, returned as numpy.")
+           "Fused resize+pad+convert+normalise+NCHW, returned as numpy. Yields "
+           "(tensor, scales, pads, resized_extents).")
       .def("letterbox_into", &ImageOps::letterbox_into, py::arg("images"), py::arg("out_ptr"),
            py::arg("out_bytes"), py::arg("dst_h"), py::arg("dst_w"), py::arg("mean"),
            py::arg("std"), py::arg("swap_rb"), py::arg("pad_value") = 114,
            py::arg("stream") = 0,
-           "Same, written straight into a caller-owned device buffer. The fast "
-           "path.")
+           "Same, written straight into a caller-owned device buffer. The fast path. "
+           "Yields (scales, pads, resized_extents).")
       .def("crop_batch", &ImageOps::crop_batch, py::arg("image"), py::arg("boxes"),
            py::arg("dst_h"), py::arg("dst_w"), py::arg("mean"), py::arg("std"),
            py::arg("swap_rb"), py::arg("stream") = 0,
