@@ -123,7 +123,14 @@ namespace shipvision {
     /// no longer does is allocate — the scratch belongs to the caller and is reused.
     struct NmsScratch {
             float* boxes = nullptr;              ///< >= num_boxes * 4 floats, on the device
-            unsigned long long* mask = nullptr;  ///< >= nms_mask_words(num_boxes) words
+            unsigned long long* mask = nullptr;  ///< >= nms_mask_words(num_boxes) words, device
+            /// >= nms_mask_words(num_boxes) words of **pinned** host memory the mask is
+            /// downloaded into before the sweep. Optional — null makes `nms` allocate a
+            /// pageable vector instead — but not free to leave null: a fresh 44 MB pageable
+            /// allocation per call costs ~31 ms on this box against 1.7 ms pinned, because the
+            /// OS faults the pages in *during* the copy. That single allocation was the whole
+            /// gap between this kernel and torchvision's at 18 000 candidates (33 ms vs 2 ms).
+            unsigned long long* host_mask = nullptr;
             size_t box_floats = 0;
             size_t mask_words = 0;
     };

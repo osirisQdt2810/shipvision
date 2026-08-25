@@ -359,8 +359,21 @@ namespace shipvision {
                                                         scratch.mask);
         check_launch("nms_mask_kernel");
 
-        std::vector<unsigned long long> mask(mask_words);
-        check(gpuMemcpyAsync(mask.data(), scratch.mask, mask.size() * sizeof(unsigned long long),
+        // Into the caller's pinned staging when there is one. The previous line here was
+        // `std::vector<unsigned long long> mask(mask_words);` — a fresh pageable allocation of
+        // up to 78 MB on every call, whose pages the OS faulted in while the DMA was writing
+        // them. Measured on the dev box: 30.8 ms for that shape against 1.7 ms into pinned
+        // memory and 5.6 ms into *reused* pageable memory. It was the entire reason native NMS
+        // benchmarked 16x slower than torchvision on the same input; the mask kernel and the
+        // sweep were never the cost. The fallback keeps the function usable from a caller with
+        // no pinned scratch, at that price.
+        std::vector<unsigned long long> fallback;
+        unsigned long long* mask = scratch.host_mask;
+        if (mask == nullptr) {
+            fallback.resize(mask_words);
+            mask = fallback.data();
+        }
+        check(gpuMemcpyAsync(mask, scratch.mask, mask_words * sizeof(unsigned long long),
                              gpuMemcpyDeviceToHost, stream),
               "download nms mask");
         // Required, not incidental: the sweep below is sequential and runs on the host.
@@ -373,7 +386,7 @@ namespace shipvision {
             if (removed[i / kNmsBlock] & (1ULL << (i % kNmsBlock)))
                 continue;
             keep.push_back(order[i]);
-            const unsigned long long* row = mask.data() + static_cast<size_t>(i) * col_blocks;
+            const unsigned long long* row = mask + static_cast<size_t>(i) * col_blocks;
             for (int j = i / kNmsBlock; j < col_blocks; ++j)
                 removed[j] |= row[j];
         }

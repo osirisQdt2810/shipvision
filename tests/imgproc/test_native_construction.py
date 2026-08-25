@@ -76,3 +76,52 @@ class TestASecondDeviceIsUsableFromAThreadOnTheFirst:
 
         assert tensor.shape == (1, 3, 320, 320)
         assert extents.shape == (1, 2)
+
+
+class TestTheNmsMaskIsStagedThroughPinnedMemory:
+    """One allocation was the whole gap between this kernel and torchvision's.
+
+    `nms()` used to download the `(n, ceil(n/64))` overlap mask into a *fresh*
+    `std::vector<unsigned long long>` on every call — up to 78 MB of pageable memory whose
+    pages the OS faulted in while the DMA was writing them. Measured on the dev box for the
+    18 764-candidate shape: 30.8 ms for that copy, 5.6 ms into reused pageable memory, 1.7 ms
+    into pinned. Native NMS benchmarked at 33 ms against torchvision's 2 ms and it was never the
+    mask kernel or the sweep. Through the instance's pinned download buffer it is 6.1 ms at
+    25 000 candidates against torchvision's 12.1 ms on realistic boxes — 2x faster at every n
+    tried, from 0.14 ms at 2 000.
+
+    Pinned structurally rather than by a timing assertion, because a timing test on a shared
+    box is a coin. The two facts that must stay true: the library function accepts a pinned
+    destination, and the binding hands it one.
+    """
+
+    IMAGE_OPS_CU = REPO / "csrc" / "shipvision" / "imgproc" / "image_ops.cu"
+
+    @staticmethod
+    def _code(path: Path) -> str:
+        """Source with `//` comment lines dropped, so prose about the old shape is not evidence
+        of it. The comment explaining this fix quotes the very line the test forbids — and the
+        first run of this test failed on that quotation, which is the trap exactly."""
+        return "\n".join(
+            line for line in path.read_text().splitlines() if not line.strip().startswith("//")
+        )
+
+    def test_the_library_downloads_into_the_callers_pinned_buffer(self) -> None:
+        source = self._code(self.IMAGE_OPS_CU)
+        body = source[source.index("std::vector<int64_t> nms(") :]
+
+        assert "scratch.host_mask" in body, "nms() ignores the pinned destination"
+        assert (
+            "std::vector<unsigned long long> mask(mask_words)" not in body
+        ), "the fresh pageable allocation is back; it cost 31 ms per call at 18k candidates"
+
+    def test_the_binding_supplies_one_from_the_pinned_download_scratch(self) -> None:
+        source = self._code(BINDINGS)
+        run_nms = source[source.index("std::vector<int64_t> run_nms(") :]
+        run_nms = run_nms[: run_nms.index("\n            }\n")]
+
+        assert "scratch.host_mask" in run_nms
+        assert "pinned_download_.reserve" in run_nms, (
+            "run_nms must stage the mask through pinned memory, not leave host_mask null and "
+            "fall back to the pageable path"
+        )

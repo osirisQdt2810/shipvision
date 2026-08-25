@@ -799,6 +799,11 @@ namespace {
                     static_cast<float*>(nms_boxes_.reserve(scratch.box_floats * sizeof(float)));
                 scratch.mask = static_cast<unsigned long long*>(
                     nms_mask_.reserve(mask_words * sizeof(unsigned long long)));
+                // The pinned download buffer the other entry points already stage through.
+                // Sized to the mask, not shared with an in-flight download: `run_nms` is
+                // serialised with every other method by the instance lock.
+                scratch.host_mask = reinterpret_cast<unsigned long long*>(
+                    pinned_download_.reserve(mask_words * sizeof(unsigned long long)));
 
                 return shipvision::nms(boxes, scores, n, iou_threshold, score_threshold, max_output,
                                        scratch, stream);
