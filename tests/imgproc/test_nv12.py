@@ -67,8 +67,14 @@ def colour_bars(height: int = 48, width: int = 64) -> tuple[np.ndarray, int]:
     """
     bars = np.array(
         [
-            (255, 255, 255), (0, 255, 255), (255, 255, 0), (0, 255, 0),
-            (255, 0, 255), (0, 0, 255), (255, 0, 0), (0, 0, 0),
+            (255, 255, 255),
+            (0, 255, 255),
+            (255, 255, 0),
+            (0, 255, 0),
+            (255, 0, 255),
+            (0, 0, 255),
+            (255, 0, 0),
+            (0, 0, 0),
         ],
         dtype=np.uint8,
     )
@@ -189,7 +195,9 @@ class TestNv12Colour:
         """Guards the test above: a fixture with flat chroma would satisfy it vacuously."""
         buffer, width = chroma_checkerboard(height=8, width=8)
         rgb = nv12_to_rgb(buffer, width)
-        assert np.abs(rgb[0:2, 0:2].mean(axis=(0, 1)) - rgb[0:2, 2:4].mean(axis=(0, 1))).max() > 50
+        assert (
+            np.abs(rgb[0:2, 0:2].mean(axis=(0, 1)) - rgb[0:2, 2:4].mean(axis=(0, 1))).max() > 50
+        )
 
     def test_a_bgr_round_trip_lands_within_chroma_subsampling_error(self) -> None:
         """4:2:0 is lossy, so this bounds the loss rather than asserting equality.
@@ -251,7 +259,7 @@ class TestNv12Letterbox:
 
     def test_a_ragged_batch_is_one_call(self, oracle_ops) -> None:
         """50 cameras do not agree on resolution, which is why the batch is ragged."""
-        frames, widths = zip(*(FIXTURES[name]() for name in sorted(FIXTURES)))
+        frames, widths = zip(*(FIXTURES[name]() for name in sorted(FIXTURES)), strict=True)
         tensor, geometries = oracle_ops.nv12_letterbox(list(frames), list(widths), (64, 64))
         assert tensor.shape == (3, 3, 64, 64)
         assert len({(g.source_height, g.source_width) for g in geometries}) == 3
@@ -328,7 +336,7 @@ class TestNativeNv12Parity:
         assert np.abs(actual - expected).max() < VALUE_TOLERANCE
 
     def test_a_ragged_batch_agrees_frame_for_frame(self, native_ops, oracle_ops) -> None:
-        frames, widths = zip(*(FIXTURES[name]() for name in sorted(FIXTURES)))
+        frames, widths = zip(*(FIXTURES[name]() for name in sorted(FIXTURES)), strict=True)
         expected, _ = oracle_ops.nv12_letterbox(list(frames), list(widths), (64, 64))
         actual, _ = native_ops.nv12_letterbox(list(frames), list(widths), (64, 64))
         assert np.abs(actual - expected).max() < VALUE_TOLERANCE
@@ -342,9 +350,7 @@ class TestNativeNv12Parity:
     def test_normalisation_agrees(self, native_ops, oracle_ops) -> None:
         buffer, width = colour_bars()
         mean, std = (123.675, 116.28, 103.53), (58.395, 57.12, 57.375)
-        expected, _ = oracle_ops.nv12_letterbox(
-            [buffer], [width], (64, 64), mean=mean, std=std
-        )
+        expected, _ = oracle_ops.nv12_letterbox([buffer], [width], (64, 64), mean=mean, std=std)
         actual, _ = native_ops.nv12_letterbox([buffer], [width], (64, 64), mean=mean, std=std)
         assert np.abs(actual - expected).max() < VALUE_TOLERANCE
 

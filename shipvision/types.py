@@ -59,6 +59,43 @@ __all__ = [
 ]
 
 
+def _as_unit_vector(array: np.ndarray, what: str) -> np.ndarray:
+    """One embedding, in the form this module promises everything stores it in.
+
+    The module docstring says embeddings are stored L2-normalised, and until this existed that
+    was a sentence rather than a fact: ``Embedding(vector=[3.0, 4.0]).vector`` came back with
+    norm 5. Nothing raised, and nothing would — the consequence lands in whoever believes the
+    contract. The whole point of normalising here is that a gallery can compute cosine
+    similarity as a plain dot product, which is one gemm instead of a gemm plus a pass over the
+    gallery; against un-normalised rows, two identical ``np.ones(512)`` vectors score 512, every
+    ``sim > 0.5`` gate admits everything, and a quality-weighted aggregator ends up weighted by
+    whichever crop had the largest activations rather than by ``quality``. The mAP simply comes
+    out wrong.
+
+    So the invariant is enforced in the one place all three carriers share — ``Embedding``,
+    ``Detection`` and ``Track`` — rather than in three copies that can drift.
+
+    A zero vector is refused rather than normalised. It has no direction: dividing gives NaN,
+    and leaving it alone gives a row at cosine 0 from everything, which is a *plausible*
+    answer to every query and therefore the worse of the two failures.
+
+    Raises:
+        ConfigurationError: empty, non-finite, or all-zero.
+    """
+    vector = np.asarray(array, dtype=np.float32).reshape(-1)
+    if vector.size == 0:
+        raise ConfigurationError(f"an {what} cannot be empty")
+    _reject_non_finite(vector, what)
+    norm = float(np.linalg.norm(vector))
+    if norm == 0.0:
+        raise ConfigurationError(
+            f"an all-zero {what} has no direction, so it cannot be normalised. Left alone it "
+            f"sits at cosine 0 from every gallery entry, which is a plausible-looking answer "
+            f"to every query rather than an obvious failure"
+        )
+    return vector / norm
+
+
 def _reject_non_finite(array: np.ndarray, what: str) -> None:
     """Refuse NaN and inf at the boundary, naming how many and where.
 
@@ -173,8 +210,7 @@ class Detection:
         if not 0.0 <= self.score <= 1.0:
             raise ConfigurationError(f"score must be in [0, 1], got {self.score}")
         if self.embedding is not None:
-            self.embedding = np.asarray(self.embedding, dtype=np.float32).reshape(-1)
-            _reject_non_finite(self.embedding, "embedding")
+            self.embedding = _as_unit_vector(self.embedding, "embedding")
 
     @property
     def width(self) -> float:
@@ -280,10 +316,7 @@ class Embedding:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        self.vector = np.asarray(self.vector, dtype=np.float32).reshape(-1)
-        if self.vector.size == 0:
-            raise ConfigurationError("an embedding cannot be empty")
-        _reject_non_finite(self.vector, "embedding")
+        self.vector = _as_unit_vector(self.vector, "embedding")
         if not 0.0 <= self.quality <= 1.0:
             raise ConfigurationError(f"quality must be in [0, 1], got {self.quality}")
 
@@ -339,6 +372,11 @@ class Track:
         # would be published to MTMC, where it lands in a distance matrix and poisons the
         # clustering for every camera at that instant — not just its own.
         _reject_non_finite(self.box, "track box")
+        # A track's embedding is stored under the same contract as everyone else's. It was
+        # checked nowhere before this: a track is what MTMC clusters on, so an un-normalised
+        # one is the carrier that reaches the furthest.
+        if self.embedding is not None:
+            self.embedding = _as_unit_vector(self.embedding, "track embedding")
         if self.state not in TrackState.ALL:
             raise ConfigurationError(f"unknown state {self.state!r}; expected {TrackState.ALL}")
 

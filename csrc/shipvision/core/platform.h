@@ -38,9 +38,6 @@ using gpuEvent_t = hipEvent_t;
     #define gpuHostAlloc hipHostMalloc
     #define gpuHostAllocDefault hipHostMallocDefault
     #define gpuHostFree hipHostFree
-    #define gpuHostAlloc hipHostMalloc
-    #define gpuHostAllocDefault hipHostMallocDefault
-    #define gpuHostFree hipHostFree
     #define gpuSetDevice hipSetDevice
     #define gpuGetDeviceCount hipGetDeviceCount
     #define gpuGetLastError hipGetLastError
@@ -66,9 +63,6 @@ using gpuEvent_t = cudaEvent_t;
     #define gpuEventRecord cudaEventRecord
     #define gpuEventSynchronize cudaEventSynchronize
     #define gpuEventDestroy cudaEventDestroy
-    #define gpuHostAlloc cudaHostAlloc
-    #define gpuHostAllocDefault cudaHostAllocDefault
-    #define gpuHostFree cudaFreeHost
     #define gpuHostAlloc cudaHostAlloc
     #define gpuHostAllocDefault cudaHostAllocDefault
     #define gpuHostFree cudaFreeHost

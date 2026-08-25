@@ -12,4 +12,4 @@ which spelling a caller reached for.
 
 from shipvision.mtmc.matrix import BaseMatrixBuilder, MATRIX_BUILDERS, NEVER_MERGE
 
-__all__ = ["BaseMatrixBuilder", "MATRIX_BUILDERS", "NEVER_MERGE"]
+__all__ = ["MATRIX_BUILDERS", "NEVER_MERGE", "BaseMatrixBuilder"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 import pytest
 
 from shipvision import (
@@ -327,6 +328,14 @@ class TestConfigurationErrors:
 
         with pytest.raises(TypeError):
             registry.build("alpha", threshhold=0.9)
+
+    def test_a_registered_class_must_be_reachable_by_the_family_it_claims(
+        self,
+        registry: Registry,
+    ) -> None:
+        @registry.register("alpha")
+        class Alpha(Base):
+            pass
 
 
 class TestIntrospection:
