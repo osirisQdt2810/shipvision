@@ -25,6 +25,9 @@ The pieces, each replaceable by name from config:
   ``appearance`` (cosine, thresholded), ``spatial`` (ground-plane separation), ``gated``
   (appearance vetoed by geometry — the production one). One package each under
   :mod:`shipvision.mtmc.core`, so a fourth strategy is a fourth directory and a decorator.
+  All three also exist compiled, in :mod:`shipvision.mtmc.backends.native`, registered under
+  the same names — ``MTMC_MATCHERS.build("gated")`` takes the fastest one this machine can
+  build and ``backend="python"`` pins the reference the compiled one is checked against.
 * :data:`~shipvision.mtmc.registry.MTMC_CLUSTERERS` — the matrix to a label per track.
   ``agglomerative``: average linkage, cut at a distance, on a precomputed matrix.
 * :class:`~shipvision.mtmc.identity.GlobalIdAssigner` — labels to *stable* ids, carrying state
@@ -59,6 +62,12 @@ compatibility shims for the spelling this package used before the matchers moved
 
 from __future__ import annotations
 
+from shipvision.mtmc.backends.native import (
+    NativeAppearanceMatcher,
+    NativeGatedMatcher,
+    NativeSpatialMatcher,
+    native_available,
+)
 from shipvision.mtmc.base import NEVER_MERGE, BaseMatcher, BaseMTMCTracker
 from shipvision.mtmc.clustering import AgglomerativeClusterer, BaseClusterer
 from shipvision.mtmc.core import AppearanceMatcher, GatedMatcher, SpatialMatcher, foot_points
@@ -107,6 +116,9 @@ __all__ = [
     "GlobalIdAssigner",
     "GroundPlane",
     "Homography",
+    "NativeAppearanceMatcher",
+    "NativeGatedMatcher",
+    "NativeSpatialMatcher",
     "ObservationGate",
     "SpatialMatcher",
     "SpatialMatrixBuilder",
@@ -114,5 +126,6 @@ __all__ = [
     "TrackObservation",
     "calculate_homography",
     "foot_points",
+    "native_available",
     "project",
 ]

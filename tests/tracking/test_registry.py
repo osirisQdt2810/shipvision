@@ -89,9 +89,13 @@ class TestTheRegistryAndTheDirectoryAgree:
 
     def test_the_class_carries_the_name_it_was_registered_under(self) -> None:
         """The decorator stamps it, so a log line can say what a tracker is without the
-        caller having to remember what it asked for."""
+        caller having to remember what it asked for.
+
+        The backend is pinned. Unpinned, what comes back depends on whether ``shipvision._C``
+        is built on the machine running the suite — which is the intended behaviour and would
+        make this assertion say something different in CI than on a build host."""
         for name in PUBLISHED:
-            built = TRACKERS.build(name, min_hits=1)
+            built = TRACKERS.build(name, backend=PYTHON, min_hits=1)
 
             assert built.name == name
             assert built.backend == PYTHON

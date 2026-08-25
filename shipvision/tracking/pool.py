@@ -38,7 +38,35 @@ from shipvision.types import (
     xyxy_to_cxcyah,
 )
 
-__all__ = ["TrackPool"]
+__all__ = ["TrackPool", "blend_embedding"]
+
+
+def blend_embedding(
+    current: np.ndarray | None, incoming: np.ndarray | None, momentum: float
+) -> np.ndarray | None:
+    """Exponential moving average of two appearance vectors, renormalised.
+
+    A track's appearance should follow the object slowly. Replacing it outright means one
+    badly-cropped frame — a person half behind a pillar — becomes the reference for every
+    future match, and the identity walks away from itself.
+
+    A free function rather than a method because the native tracking backend keeps the
+    appearance vector on the Python side (the C++ pool never reads it, and marshalling a
+    512-float vector per track per frame to average it would cost more than the average) and
+    must produce *the same* vector as :class:`TrackPool` does. Two copies of an EMA is how one
+    backend's tracks slowly stop matching the other's in the cross-camera tier, with neither
+    tracker failing a test.
+
+    Returns:
+        The blended vector, or ``current`` unchanged when there is nothing to blend in.
+    """
+    if incoming is None:
+        return current
+    if current is None:
+        return incoming.astype(np.float32)
+    blended = momentum * current + (1.0 - momentum) * incoming
+    norm = float(np.linalg.norm(blended))
+    return (blended / norm).astype(np.float32) if norm > 1e-9 else current
 
 
 class TrackPool:
@@ -402,22 +430,8 @@ class TrackPool:
     def _blend_embedding(
         self, track: Track, embedding: np.ndarray | None, momentum: float
     ) -> None:
-        """Exponential moving average, renormalised.
-
-        A track's appearance should follow the object slowly. Replacing it outright means one
-        badly-cropped frame — a person half behind a pillar — becomes the reference for every
-        future match, and the identity walks away from itself.
-        """
-        if embedding is None:
-            return
-        if track.embedding is None:
-            track.embedding = embedding.astype(np.float32)
-            return
-        blended = momentum * track.embedding + (1.0 - momentum) * embedding
-        norm = float(np.linalg.norm(blended))
-        track.embedding = (
-            (blended / norm).astype(np.float32) if norm > 1e-9 else track.embedding
-        )
+        """Fold this frame's appearance into the track's. See :func:`blend_embedding`."""
+        track.embedding = blend_embedding(track.embedding, embedding, momentum)
 
     def mark_missed(self, rows: Sequence[int]) -> None:
         """Age the tracks that found nothing this frame."""

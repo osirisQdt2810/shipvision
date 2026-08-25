@@ -52,7 +52,15 @@ resolved  = TRACKERS.build("bytetrack")   # fastest available; numpy is the floo
 
 The numpy one is not a toy. It is the oracle the compiled one is checked against — a fused
 kernel nobody can compare against is a fused kernel nobody can trust — and it is what runs
-on a machine with no build.
+on a machine with no build. `build` without a backend resolves to the fastest one this host can
+actually *build*, so the line above works unchanged on a laptop; naming a backend never falls
+back, because a deployment that asked for `native` and quietly got numpy would be a throughput
+regression reported as a successful start-up.
+
+Not every algorithm has a compiled twin yet, and the registry says which do:
+`TRACKERS.backends("sort")` is `["native", "python"]` while `TRACKERS.backends("ocsort")` is
+`["python"]`. Today the compiled trackers are `sort` and `bytetrack`, and all three cross-camera
+matchers (`appearance`, `spatial`, `gated`) have one.
 
 ## What is here
 

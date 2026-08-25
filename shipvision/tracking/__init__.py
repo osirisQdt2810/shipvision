@@ -55,6 +55,12 @@ Layout, and the one reason each directory exists:
 ``core/``
     One **package** per algorithm: the tracker class, what it asks of the shared track state,
     and the helpers it alone uses. Adding an algorithm is a new package plus a decorator.
+``backends/``
+    What *runs* an algorithm, as opposed to which algorithm it is. ``core/`` is numpy;
+    :mod:`shipvision.tracking.backends.native` is the C++ association loops in
+    ``shipvision._C``, and all five algorithms have a compiled twin. Both backends register
+    under the same name, so ``TRACKERS.build("sort")`` takes the fastest one this machine can
+    actually build and ``TRACKERS.build("sort", backend="python")`` pins the reference.
 ``trackers/``
     A compatibility shim for the flat ``trackers/<name>.py`` layout this replaced. Nothing new
     goes there.
@@ -82,6 +88,14 @@ from shipvision.tracking.association import (
     isolation,
     min_fuse,
     pairwise_appearance,
+)
+from shipvision.tracking.backends.native import (
+    NativeBotSortTracker,
+    NativeByteTrackTracker,
+    NativeDeepSortV2Tracker,
+    NativeOcSortTracker,
+    NativeSortTracker,
+    native_available,
 )
 from shipvision.tracking.base import BaseTracker, next_track_id
 from shipvision.tracking.core import (
@@ -117,6 +131,11 @@ __all__ = [
     "DeepSortV2Tracker",
     "ExternalCameraMotion",
     "KalmanFilter",
+    "NativeBotSortTracker",
+    "NativeByteTrackTracker",
+    "NativeDeepSortV2Tracker",
+    "NativeOcSortTracker",
+    "NativeSortTracker",
     "NoCameraMotion",
     "OcSortTracker",
     "SortTracker",
@@ -136,6 +155,7 @@ __all__ = [
     "iou_cost",
     "isolation",
     "min_fuse",
+    "native_available",
     "next_track_id",
     "pairwise_appearance",
 ]

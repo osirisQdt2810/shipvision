@@ -103,7 +103,11 @@ class TestMatcherRegistry:
 
     @pytest.mark.parametrize("name", MTMC_MATCHERS.names())
     def test_every_registered_matcher_implements_the_contract(self, name: str) -> None:
-        built = MTMC_MATCHERS.build(name)
+        """The backend is pinned. Unpinned, what comes back depends on whether
+        ``shipvision._C`` is built on the machine running the suite — which is the intended
+        behaviour and would make this assertion say something different in CI than on a build
+        host."""
+        built = MTMC_MATCHERS.build(name, backend=PYTHON)
 
         assert isinstance(built, BaseMatcher)
         assert built.name == name

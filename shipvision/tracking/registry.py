@@ -40,7 +40,12 @@ the only honest way to decide between them. Every reference implementation this 
 replaces picks its tracker with a hand-written ``if/elif``, and every one has the same
 consequence: the tracker that shipped first wins by default rather than by measurement.
 
-There is no ``native`` tracker yet. When there is, it registers here under the same name as
-its numpy twin and a parity test compares the two on one sequence — a compiled association
-loop nobody can compare against is a compiled association loop nobody can trust.
+All five have a ``native`` twin — :mod:`shipvision.tracking.backends.native`, over the C++
+association loops in ``shipvision._C``. Both backends register under the same name, so a config
+that says ``sort`` keeps saying ``sort``, and ``tests/tracking/backends/test_parity.py``
+enumerates the pairs *from this registry* and runs each over one sequence, comparing
+identities: a compiled association loop nobody can compare against is a compiled association
+loop nobody can trust. Enumerating rather than listing is what makes that true by construction
+— a compiled tracker registered without its numpy oracle would join the parity suite the day
+it was added, rather than the day somebody remembered to add it to a list.
 """

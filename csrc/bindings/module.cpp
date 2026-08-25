@@ -36,6 +36,8 @@
 #include <cstring>
 #include <vector>
 
+#include "bindings/mtmc.h"
+#include "bindings/tracking.h"
 #include "shipvision/core/buffers.h"
 #include "shipvision/imgproc/image_ops.h"
 
@@ -830,6 +832,17 @@ PYBIND11_MODULE(_C, m) {
     m.def("cuda_available", &shipvision::gpu_available,
           "True when this build has GPU kernels and a visible device.");
     m.def("device_count", &shipvision::device_count, "Number of visible devices.");
+
+    // The trackers and the cross-camera matrices. Host work, no stream, no device pointer, so
+    // they live in their own translation unit — see bindings/tracking.h. They are reachable
+    // even where `cuda_available()` is false, and that is the point: a build without a visible
+    // device still runs the association loops the fleet's per-frame budget is spent in.
+    shipvision::bindings::bind_tracking(m);
+
+    // The whole cross-camera matchers and their clusterer — see bindings/mtmc.h. Host work too,
+    // and a separate translation unit for the same reason: the single-camera trackers and the
+    // cross-camera matchers are two families with two lifecycles.
+    shipvision::bindings::bind_mtmc(m);
 
     py::class_<ImageOps>(m, "ImageOps", "Fused pre/post-processing kernels bound to one device.")
         .def(py::init<int>(), py::arg("device_index") = 0)

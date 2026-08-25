@@ -151,9 +151,14 @@ class TestEachAlgorithmIsAPackageOfThreeFiles:
 
     @pytest.mark.parametrize("algorithm", ALGORITHMS)
     def test_the_registered_class_is_the_one_in_tracker_py(self, algorithm: str) -> None:
+        """The **python** backend's class, pinned. Unpinned, the registry answers with the
+        fastest backend that implements the name, which for ``sort`` and ``bytetrack`` is the
+        compiled twin in ``backends/native.py`` — a different class in a different file, and
+        correctly so. The claim here is about the reference implementation's layout."""
+        from shipvision.registry import PYTHON
         from shipvision.tracking import TRACKERS
 
-        cls = TRACKERS.get(algorithm)
+        cls = TRACKERS.get(algorithm, PYTHON)
         declared = [
             node.name
             for node in ast.walk(ast.parse((CORE / algorithm / "tracker.py").read_text()))
