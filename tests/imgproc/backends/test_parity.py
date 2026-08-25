@@ -62,21 +62,22 @@ def candidate(request):
 # ------------------------------------------------------------------------- letterbox
 
 
-@pytest.mark.parametrize("source_hw", SHAPES)
-@pytest.mark.parametrize("target_hw", [(640, 640), (512, 512)])
-def test_letterbox_agrees_with_the_oracle(
-    candidate, oracle, source_hw: tuple[int, int], target_hw: tuple[int, int]
-) -> None:
-    rng = np.random.default_rng(hash(source_hw) % 2**32)
-    image = rng.integers(0, 256, size=(*source_hw, 3), dtype=np.uint8)
+class TestLetterbox:
+    @pytest.mark.parametrize("source_hw", SHAPES)
+    @pytest.mark.parametrize("target_hw", [(640, 640), (512, 512)])
+    def test_letterbox_agrees_with_the_oracle(
+        self, candidate, oracle, source_hw: tuple[int, int], target_hw: tuple[int, int]
+    ) -> None:
+        rng = np.random.default_rng(hash(source_hw) % 2**32)
+        image = rng.integers(0, 256, size=(*source_hw, 3), dtype=np.uint8)
 
-    expected, expected_geometry = oracle.letterbox(image, target_hw)
-    actual, actual_geometry = candidate.letterbox(image, target_hw)
+        expected, expected_geometry = oracle.letterbox(image, target_hw)
+        actual, actual_geometry = candidate.letterbox(image, target_hw)
 
-    assert actual.shape == expected.shape
-    assert actual.dtype == np.float32
-    assert actual_geometry == expected_geometry
-    assert np.abs(actual - expected).max() < VALUE_TOLERANCE
+        assert actual.shape == expected.shape
+        assert actual.dtype == np.float32
+        assert actual_geometry == expected_geometry
+        assert np.abs(actual - expected).max() < VALUE_TOLERANCE
 
 
 RAGGED_BATCH = [(1080, 1920), (1079, 1919), (720, 1280), (37, 53), (1077, 1920), (480, 640)]
@@ -89,164 +90,163 @@ multiples of 16. With ``1079x1919`` in second place they are ``0, 6220800, 12432
 alignment a real fleet produces."""
 
 
-def test_letterbox_agrees_on_a_ragged_batch(candidate, oracle) -> None:
-    """Fifty cameras do not agree on resolution, so a ragged batch is the normal case.
+class TestLetterboxAgreesOnARaggedBatch:
+    def test_letterbox_agrees_on_a_ragged_batch(self, candidate, oracle) -> None:
+        """Fifty cameras do not agree on resolution, so a ragged batch is the normal case.
 
-    Worth its own test because the native backend takes a very different path for it: one
-    descriptor per image, uploaded as a table, so that a single kernel launch covers the whole
-    batch. Getting an offset wrong in that table shows up here and nowhere else.
-    """
-    rng = np.random.default_rng(11)
-    images = [rng.integers(0, 256, size=(h, w, 3), dtype=np.uint8) for h, w in RAGGED_BATCH]
+        Worth its own test because the native backend takes a very different path for it: one
+        descriptor per image, uploaded as a table, so that a single kernel launch covers the whole
+        batch. Getting an offset wrong in that table shows up here and nowhere else.
+        """
+        rng = np.random.default_rng(11)
+        images = [rng.integers(0, 256, size=(h, w, 3), dtype=np.uint8) for h, w in RAGGED_BATCH]
 
-    expected, expected_geometry = oracle.letterbox(images, (640, 640))
-    actual, actual_geometry = candidate.letterbox(images, (640, 640))
+        expected, expected_geometry = oracle.letterbox(images, (640, 640))
+        actual, actual_geometry = candidate.letterbox(images, (640, 640))
 
-    assert actual.shape == (len(RAGGED_BATCH), 3, 640, 640)
-    assert actual_geometry == expected_geometry
-    assert np.abs(actual - expected).max() < VALUE_TOLERANCE
+        assert actual.shape == (len(RAGGED_BATCH), 3, 640, 640)
+        assert actual_geometry == expected_geometry
+        assert np.abs(actual - expected).max() < VALUE_TOLERANCE
 
+    def test_the_ragged_batch_really_does_land_unaligned(self) -> None:
+        """The premise of the test above, asserted so it cannot rot.
 
-def test_the_ragged_batch_really_does_land_unaligned() -> None:
-    """The premise of the test above, asserted so it cannot rot.
+        A batch whose frames all happen to be 16-byte multiples exercises the descriptor table
+        without ever exercising an odd offset in it, and nothing about the test would say so. This
+        computes the offsets the native backend will use — one frame after another, ``h * w * 3``
+        bytes each — and requires that at least one is not 16-aligned.
+        """
+        offsets = np.cumsum([0, *(h * w * 3 for h, w in RAGGED_BATCH)])[:-1]
 
-    A batch whose frames all happen to be 16-byte multiples exercises the descriptor table
-    without ever exercising an odd offset in it, and nothing about the test would say so. This
-    computes the offsets the native backend will use — one frame after another, ``h * w * 3``
-    bytes each — and requires that at least one is not 16-aligned.
-    """
-    offsets = np.cumsum([0, *(h * w * 3 for h, w in RAGGED_BATCH)])[:-1]
+        assert any(offset % 16 for offset in offsets), (
+            f"every frame in RAGGED_BATCH starts 16-byte aligned ({offsets % 16}), so this batch "
+            f"cannot see a misaligned descriptor offset"
+        )
 
-    assert any(offset % 16 for offset in offsets), (
-        f"every frame in RAGGED_BATCH starts 16-byte aligned ({offsets % 16}), so this batch "
-        f"cannot see a misaligned descriptor offset"
-    )
+    def test_letterbox_agrees_with_a_non_default_normalisation(
+        self, candidate, oracle, bgr_image
+    ) -> None:
+        """ImageNet statistics, and a pad value that is not the YOLO grey.
 
+        Separate from the default case because the mean/std must be indexed in *destination* (RGB)
+        order, after the channel swap. A backend that normalised before swapping passes every
+        test with ``mean=0, std=255`` and fails this one.
+        """
+        mean = (123.675, 116.28, 103.53)
+        std = (58.395, 57.12, 57.375)
 
-def test_letterbox_agrees_with_a_non_default_normalisation(
-    candidate, oracle, bgr_image
-) -> None:
-    """ImageNet statistics, and a pad value that is not the YOLO grey.
+        expected, _ = oracle.letterbox(bgr_image, (256, 128), pad_value=0, mean=mean, std=std)
+        actual, _ = candidate.letterbox(bgr_image, (256, 128), pad_value=0, mean=mean, std=std)
 
-    Separate from the default case because the mean/std must be indexed in *destination* (RGB)
-    order, after the channel swap. A backend that normalised before swapping passes every
-    test with ``mean=0, std=255`` and fails this one.
-    """
-    mean = (123.675, 116.28, 103.53)
-    std = (58.395, 57.12, 57.375)
+        assert np.abs(actual - expected).max() < VALUE_TOLERANCE * 2
 
-    expected, _ = oracle.letterbox(bgr_image, (256, 128), pad_value=0, mean=mean, std=std)
-    actual, _ = candidate.letterbox(bgr_image, (256, 128), pad_value=0, mean=mean, std=std)
+    # ------------------------------------------------------------------------------ crops
 
-    assert np.abs(actual - expected).max() < VALUE_TOLERANCE * 2
+    def test_crop_agrees_with_the_oracle(self, candidate, oracle, bgr_image) -> None:
+        """Including the boxes that clamp, the one-pixel box, the zero-area box and the inside-out
+        one. Those are the rows where two implementations are most likely to differ, and the ones
+        a detector produces most reliably."""
+        expected = oracle.crop_batch(bgr_image, CROP_BOXES, (64, 32))
+        actual = candidate.crop_batch(bgr_image, CROP_BOXES, (64, 32))
 
+        assert actual.shape == (len(CROP_BOXES), 3, 64, 32)
+        assert actual.dtype == np.float32
+        for index in range(len(CROP_BOXES)):
+            assert (
+                np.abs(actual[index] - expected[index]).max() < VALUE_TOLERANCE
+            ), f"box {index} = {CROP_BOXES[index].tolist()} disagrees"
 
-# ------------------------------------------------------------------------------ crops
+    def test_crop_agrees_with_a_non_default_normalisation(
+        self, candidate, oracle, bgr_image
+    ) -> None:
+        """The zero-area rows come back as ``(0 - mean) / std``, which is only observable when the
+        mean is not zero."""
+        mean = (123.675, 116.28, 103.53)
+        std = (58.395, 57.12, 57.375)
 
+        expected = oracle.crop_batch(bgr_image, CROP_BOXES, (48, 48), mean=mean, std=std)
+        actual = candidate.crop_batch(bgr_image, CROP_BOXES, (48, 48), mean=mean, std=std)
 
-def test_crop_agrees_with_the_oracle(candidate, oracle, bgr_image) -> None:
-    """Including the boxes that clamp, the one-pixel box, the zero-area box and the inside-out
-    one. Those are the rows where two implementations are most likely to differ, and the ones
-    a detector produces most reliably."""
-    expected = oracle.crop_batch(bgr_image, CROP_BOXES, (64, 32))
-    actual = candidate.crop_batch(bgr_image, CROP_BOXES, (64, 32))
+        assert np.abs(actual - expected).max() < VALUE_TOLERANCE * 2
 
-    assert actual.shape == (len(CROP_BOXES), 3, 64, 32)
-    assert actual.dtype == np.float32
-    for index in range(len(CROP_BOXES)):
+    def test_an_empty_frame_crops_to_an_empty_batch_everywhere(
+        self, candidate, bgr_image
+    ) -> None:
+        crops = candidate.crop_batch(bgr_image, np.zeros((0, 4), dtype=np.float32), (64, 32))
+
+        assert crops.shape == (0, 3, 64, 32)
+
+    # -------------------------------------------------------------------------------- nms
+
+    @pytest.mark.parametrize("iou_threshold", [0.3, 0.5, 0.7])
+    def test_classic_nms_agrees_with_the_oracle(
+        self, candidate, oracle, iou_threshold: float
+    ) -> None:
+        """Indices, in order, exactly — not a set.
+
+        Order is part of the answer: it is descending score, and downstream code that takes the
+        first *k* survivors depends on it. Comparing sets would let a backend that sorted
+        ascending pass.
+        """
+        boxes, scores = _proposals(seed=3, count=400)
+
+        expected = oracle.nms(boxes, scores, iou_threshold=iou_threshold)
+        actual = candidate.nms(boxes, scores, iou_threshold=iou_threshold)
+
+        assert actual.tolist() == expected.tolist()
+
+    def test_classic_nms_agrees_on_exact_duplicates(self, candidate, oracle) -> None:
+        """Every backend must break a tie the same way, or two of them disagree on a frame where
+        a detector emitted the same proposal twice — which happens on flat water constantly."""
+        boxes = np.array([[0.0, 0.0, 10.0, 10.0]] * 6, dtype=np.float32)
+        scores = np.array([0.5, 0.5, 0.9, 0.5, 0.9, 0.5], dtype=np.float32)
+
+        expected = oracle.nms(boxes, scores, iou_threshold=0.5)
+        actual = candidate.nms(boxes, scores, iou_threshold=0.5)
+
+        assert actual.tolist() == expected.tolist() == [2]
+
+    def test_classic_nms_agrees_under_a_score_threshold(self, candidate, oracle) -> None:
+        boxes, scores = _proposals(seed=5, count=200)
+
+        expected = oracle.nms(boxes, scores, iou_threshold=0.45, score_threshold=0.4)
+        actual = candidate.nms(boxes, scores, iou_threshold=0.45, score_threshold=0.4)
+
+        assert actual.tolist() == expected.tolist()
+
+    def test_nms_agrees_on_no_boxes_at_all(self, candidate, oracle) -> None:
+        empty_boxes = np.zeros((0, 4), dtype=np.float32)
+        empty_scores = np.zeros(0, dtype=np.float32)
+
+        actual = candidate.nms(empty_boxes, empty_scores, iou_threshold=0.5)
+
+        assert actual.shape == (0,)
+        assert actual.dtype == np.int64
         assert (
-            np.abs(actual[index] - expected[index]).max() < VALUE_TOLERANCE
-        ), f"box {index} = {CROP_BOXES[index].tolist()} disagrees"
+            actual.tolist() == oracle.nms(empty_boxes, empty_scores, iou_threshold=0.5).tolist()
+        )
 
+    @pytest.mark.parametrize("method", ["linear", "gauss", "neighborhood", "none"])
+    def test_the_non_classic_methods_are_identical_across_backends(
+        self, candidate, oracle, method: str
+    ) -> None:
+        """They are identical because they are the same code — every backend calls the shared
+        numpy implementation. Asserted anyway: it is the property callers rely on, and a backend
+        that "optimised" one of them would break it silently."""
+        boxes, scores = _proposals(seed=9, count=120)
 
-def test_crop_agrees_with_a_non_default_normalisation(candidate, oracle, bgr_image) -> None:
-    """The zero-area rows come back as ``(0 - mean) / std``, which is only observable when the
-    mean is not zero."""
-    mean = (123.675, 116.28, 103.53)
-    std = (58.395, 57.12, 57.375)
+        expected, expected_scores = oracle.nms_with_scores(
+            boxes, scores, iou_threshold=0.5, method=method, score_threshold=0.2
+        )
+        actual = candidate.nms(
+            boxes, scores, iou_threshold=0.5, method=method, score_threshold=0.2
+        )
+        actual_scores = candidate.nms_with_scores(
+            boxes, scores, iou_threshold=0.5, method=method, score_threshold=0.2
+        )[1]
 
-    expected = oracle.crop_batch(bgr_image, CROP_BOXES, (48, 48), mean=mean, std=std)
-    actual = candidate.crop_batch(bgr_image, CROP_BOXES, (48, 48), mean=mean, std=std)
-
-    assert np.abs(actual - expected).max() < VALUE_TOLERANCE * 2
-
-
-def test_an_empty_frame_crops_to_an_empty_batch_everywhere(candidate, bgr_image) -> None:
-    crops = candidate.crop_batch(bgr_image, np.zeros((0, 4), dtype=np.float32), (64, 32))
-
-    assert crops.shape == (0, 3, 64, 32)
-
-
-# -------------------------------------------------------------------------------- nms
-
-
-@pytest.mark.parametrize("iou_threshold", [0.3, 0.5, 0.7])
-def test_classic_nms_agrees_with_the_oracle(candidate, oracle, iou_threshold: float) -> None:
-    """Indices, in order, exactly — not a set.
-
-    Order is part of the answer: it is descending score, and downstream code that takes the
-    first *k* survivors depends on it. Comparing sets would let a backend that sorted
-    ascending pass.
-    """
-    boxes, scores = _proposals(seed=3, count=400)
-
-    expected = oracle.nms(boxes, scores, iou_threshold=iou_threshold)
-    actual = candidate.nms(boxes, scores, iou_threshold=iou_threshold)
-
-    assert actual.tolist() == expected.tolist()
-
-
-def test_classic_nms_agrees_on_exact_duplicates(candidate, oracle) -> None:
-    """Every backend must break a tie the same way, or two of them disagree on a frame where
-    a detector emitted the same proposal twice — which happens on flat water constantly."""
-    boxes = np.array([[0.0, 0.0, 10.0, 10.0]] * 6, dtype=np.float32)
-    scores = np.array([0.5, 0.5, 0.9, 0.5, 0.9, 0.5], dtype=np.float32)
-
-    expected = oracle.nms(boxes, scores, iou_threshold=0.5)
-    actual = candidate.nms(boxes, scores, iou_threshold=0.5)
-
-    assert actual.tolist() == expected.tolist() == [2]
-
-
-def test_classic_nms_agrees_under_a_score_threshold(candidate, oracle) -> None:
-    boxes, scores = _proposals(seed=5, count=200)
-
-    expected = oracle.nms(boxes, scores, iou_threshold=0.45, score_threshold=0.4)
-    actual = candidate.nms(boxes, scores, iou_threshold=0.45, score_threshold=0.4)
-
-    assert actual.tolist() == expected.tolist()
-
-
-def test_nms_agrees_on_no_boxes_at_all(candidate, oracle) -> None:
-    empty_boxes = np.zeros((0, 4), dtype=np.float32)
-    empty_scores = np.zeros(0, dtype=np.float32)
-
-    actual = candidate.nms(empty_boxes, empty_scores, iou_threshold=0.5)
-
-    assert actual.shape == (0,)
-    assert actual.dtype == np.int64
-    assert actual.tolist() == oracle.nms(empty_boxes, empty_scores, iou_threshold=0.5).tolist()
-
-
-@pytest.mark.parametrize("method", ["linear", "gauss", "neighborhood", "none"])
-def test_the_non_classic_methods_are_identical_across_backends(
-    candidate, oracle, method: str
-) -> None:
-    """They are identical because they are the same code — every backend calls the shared
-    numpy implementation. Asserted anyway: it is the property callers rely on, and a backend
-    that "optimised" one of them would break it silently."""
-    boxes, scores = _proposals(seed=9, count=120)
-
-    expected, expected_scores = oracle.nms_with_scores(
-        boxes, scores, iou_threshold=0.5, method=method, score_threshold=0.2
-    )
-    actual = candidate.nms(boxes, scores, iou_threshold=0.5, method=method, score_threshold=0.2)
-    actual_scores = candidate.nms_with_scores(
-        boxes, scores, iou_threshold=0.5, method=method, score_threshold=0.2
-    )[1]
-
-    assert actual.tolist() == expected.tolist()
-    assert actual_scores.tolist() == pytest.approx(expected_scores.tolist())
+        assert actual.tolist() == expected.tolist()
+        assert actual_scores.tolist() == pytest.approx(expected_scores.tolist())
 
 
 # ---------------------------------------------------------------------------- helpers

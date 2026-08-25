@@ -24,11 +24,12 @@ CONVENTION 1 — SAMPLING CENTRES ARE HALF-PIXEL, ``align_corners=False``
 
     Taps outside the source are handled by clamping the *index*, not the coordinate:
     ``x0 = floor(src)``, ``x1 = min(x0 + 1, extent - 1)``, and the low tap is read at
-    ``max(x0, 0)`` while the interpolation weight still uses the unclamped ``x0``. For the
-    coordinate range this code can produce — ``src`` is never below ``-0.5`` nor above
-    ``extent - 1`` — that is bit-identical to torch's "clamp the coordinate to 0" and to
-    ``grid_sample(padding_mode="border")``. There is no antialiasing on the downscale path, in
-    any backend, because the kernel has none.
+    ``max(x0, 0)`` while the interpolation weight still uses the unclamped ``x0``. ``src`` is
+    never below ``-0.5``; on the upscale path it *can* exceed ``extent - 1`` (``resize_centres(2,
+    4)`` ends at 1.25 against an extent of 2), and then both taps collapse onto the last pixel
+    — which is exactly what torch's "clamp the coordinate to 0" and
+    ``grid_sample(padding_mode="border")`` produce, so the gather stays bit-identical. There is
+    no antialiasing on the downscale path, in any backend, because the kernel has none.
 
 CONVENTION 2 — THE RESIZED EXTENT IS ROUNDED HALF UP
     ``scale = min(target_h / source_h, target_w / source_w)`` computed in **float32**, then
@@ -256,8 +257,16 @@ def crop_centres(low: float, high: float, target_extent: int) -> np.ndarray:
     """Half-pixel centres inside a continuous ``[low, high]`` sub-region of the source.
 
     The same convention as :func:`resize_centres`, with the sub-region's origin added before
-    the half-pixel shift — which is what makes a crop of the whole frame identical to a resize
-    of it.
+    the half-pixel shift — so ``crop_centres(0, extent, n)`` is ``resize_centres(extent, n)``
+    exactly.
+
+    That identity holds for *this function*, not for ``crop_batch``. A box reaches this code
+    through :func:`clamp_boxes_to_frame`, which clips to the last addressable pixel
+    ``extent - 1`` because it must agree with the CUDA crop kernel — so a full-frame box
+    ``[0, W]`` arrives as ``[0, W - 1]`` and its centres differ from a resize's by one source
+    pixel of span. That is the deliberate cost of one clamp rule shared with the kernel, and
+    ``tests/imgproc/test_conventions.py`` pins both facts rather than claiming the invariant
+    where it does not hold.
     """
     index = np.arange(target_extent, dtype=np.float32) + np.float32(0.5)
     span = np.float32(high) - np.float32(low)

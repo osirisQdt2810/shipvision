@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from shipvision.imgproc.nms.candidates import CLASSIC, LINEAR
+from shipvision.imgproc.nms.candidates import CLASSIC, GAUSS, LINEAR
 from shipvision.types import iou_matrix
 
 __all__ = ["decay_weights", "greedy"]
@@ -73,7 +73,26 @@ def greedy(
         if rest.size == 0:
             break
         overlaps = iou_matrix(boxes[order[best]][None, :], boxes[order[rest]])[0]
-        punished = overlaps > np.float32(iou_threshold)
+        # WHICH BOXES GET DECAYED depends on the method, and this is the one place the three
+        # genuinely differ in *shape* rather than in the weight they apply.
+        #
+        # `classic` and `linear` act only above the threshold: classic removes there and
+        # nowhere else, and linear's `1 - iou` is the paper's Eq. (3), which is explicitly
+        # piecewise — identity below N_t, decay above. Both need the gate.
+        #
+        # `gauss` does not. Eq. (4) is `s_i <- s_i * exp(-iou(M, b_i)^2 / sigma)` for every
+        # b_i not yet kept, with no N_t anywhere; removing the discontinuity at N_t is the
+        # paper's *stated reason* for preferring it over the linear rule. This code used to
+        # gate all three, which did two things to gauss at once: it removed every decay in the
+        # 0-to-N_t band — where soft-NMS does most of its work on a crowded quayside — and it
+        # put the discontinuity back at N_t, so the method was linear-with-a-different-curve
+        # rather than the paper's. Two moored vessels at IoU 0.40 under sigma=0.5 came back at
+        # 0.85 where the paper says 0.617, and gauss and linear returned identical results.
+        # No test could see it because every gauss case used an IoU above the gate.
+        if method == GAUSS:
+            punished = np.ones_like(overlaps, dtype=bool)
+        else:
+            punished = overlaps > np.float32(iou_threshold)
         if not punished.any():
             continue
 
@@ -91,7 +110,9 @@ def decay_weights(overlaps: np.ndarray, *, method: str, sigma: float) -> np.ndar
 
     Zero for ``classic`` — removal expressed as a weight, so there is one loop instead of
     two — ``1 - iou`` for ``linear`` and ``exp(-iou^2 / sigma)`` for ``gauss``. The last two
-    are the soft-NMS paper's, and the C++ reference computed the same expressions.
+    are the soft-NMS paper's Eq. (3) and Eq. (4), and the C++ reference computed the same
+    expressions. Which boxes each is *applied to* is decided by the caller: linear is
+    piecewise and only ever sees overlaps above the threshold; gauss sees every live box.
     """
     if method == CLASSIC:
         return np.zeros_like(overlaps)

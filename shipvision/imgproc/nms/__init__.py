@@ -12,10 +12,17 @@ The rules, stated once:
 
 * **Admission** is ``score >= score_threshold``, inclusive — see
   :func:`~shipvision.imgproc.nms.candidates.prepare`, which also fixes the tie order.
-* **Overlap** punishes when ``iou > iou_threshold``, strictly. A threshold of 1.0 is
-  therefore a documented no-op rather than a duplicate remover, and two boxes at exactly the
-  threshold both survive. The CUDA kernel, ``torchvision.ops.nms`` and the C++ reference all
-  agree on this one.
+* **Overlap** punishes when ``iou > iou_threshold``, strictly, for ``classic`` and
+  ``linear``. A threshold of 1.0 is therefore a documented no-op for those two rather than a
+  duplicate remover, and two boxes at exactly the threshold both survive. The CUDA kernel,
+  ``torchvision.ops.nms`` and the C++ reference all agree on this one.
+  **``gauss`` is not gated at all.** Soft-NMS's Eq. (4) — ``s_i <- s_i * exp(-iou^2 / sigma)``
+  for every box not yet kept — has no threshold in it, and removing the discontinuity at the
+  threshold is the paper's stated reason for preferring it over the linear rule. Under
+  ``gauss`` the threshold is ignored and every live candidate is decayed by its overlap with
+  the box just kept; a threshold of 1.0 still decays. This used to be gated like the others,
+  which made it ``linear`` with a different curve — see the note in
+  :func:`~shipvision.imgproc.nms.greedy.greedy`.
 * **Departure**: a candidate leaves the pool when its decayed score drops below
   ``score_threshold`` or reaches zero — see :func:`~shipvision.imgproc.nms.greedy.greedy`.
 

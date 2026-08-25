@@ -279,12 +279,42 @@ class TestCropCentresAtANonIntegerSpan:
             [10.166667, 11.5, 12.833333], abs=1e-5
         )
 
-    def test_it_agrees_with_a_resize_of_the_whole_frame(self, ops) -> None:
-        """The same non-integer ratio through both entry points.
+    def test_the_helper_agrees_with_a_resize_of_the_whole_frame(self, ops) -> None:
+        """``crop_centres(0, 4, 3)`` is ``resize_centres(4, 3)`` — the helper's identity.
 
-        A crop covering ``[0, 4]`` of a 4-wide source into 3 output pixels must read the same
-        taps as a resize of that source to 3 — and both must be the achieved ratio 4/3.
+        This used to be described as "the same ratio through both entry points", and it is
+        not: it exercises the continuous-region helper only. Whether the same holds through
+        ``crop_batch`` is the next test, and the answer there is no, on purpose.
         """
         crop = crop_centres(0.0, 4.0, 3)
 
         assert crop.tolist() == pytest.approx(resize_centres(4, 3).tolist())
+
+    def test_through_crop_batch_a_full_frame_box_is_one_pixel_shorter_than_a_resize(
+        self, ops
+    ) -> None:
+        """Pinned rather than claimed away. ``crop_batch`` clamps boxes to the last addressable
+        pixel, ``extent - 1``, because it has to agree with the CUDA crop kernel — so a
+        full-frame box ``[0, 4]`` on a 4-wide frame arrives as ``[0, 3]`` and samples centres
+        ``[0, 1, 2]`` rather than a resize's ``[0.167, 1.5, 2.833]``: a different tap on every
+        column. The practical cost is one source pixel of span, only for boxes touching the
+        right or bottom border, and it is the deliberate price of one clamp rule shared with
+        the kernel. If someone changes that clamp, this is the test that says so.
+        """
+        # 4x4, a horizontal ramp on every row and every channel: tall enough that the y clamp
+        # is not degenerate (a 1-row frame clamps to [0, 0] and yields the documented black
+        # crop, which is what the first draft of this test tripped over), and identical across
+        # channels so a BGR/RGB swap cannot masquerade as a sampling difference.
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        frame[:, :, :] = np.array([0, 60, 120, 180], dtype=np.uint8)[None, :, None]
+        box = np.array([[0.0, 0.0, 4.0, 4.0]], dtype=np.float32)
+
+        crop = ops.crop_batch(frame, box, (3, 3), mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0))
+        clamped_span = crop_centres(0.0, 3.0, 3)  # what [0, 3] gives: exactly 0, 1, 2
+        resize_span = resize_centres(4, 3)  # what a true resize gives
+
+        assert clamped_span.tolist() == pytest.approx([0.0, 1.0, 2.0])
+        assert clamped_span.tolist() != pytest.approx(resize_span.tolist())
+        # The pixels read are the ramp at columns 0, 1, 2 exactly — integer taps, no
+        # interpolation — which is the clamped span and not the resize's fractional taps.
+        assert crop[0, 0, 0, :].tolist() == pytest.approx([0.0, 60.0, 120.0], abs=0.5)
