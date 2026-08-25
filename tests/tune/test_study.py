@@ -221,3 +221,75 @@ class TestParallelTrials:
         result = run_study("sort", [case], space=small_space, trials=6, seed=4, jobs=2)
 
         assert result.trials + result.pruned + result.invalid == 6
+
+
+class TestTheBestTrialIsReScoredAsItRan:
+    """Optuna records only what it was asked to suggest, so `best.params` is the sampled half of a
+    configuration; the constants are the other half. Re-scoring without them reported a number
+    no trial produced and, where a constant made the default invalid, raised after the study."""
+
+    def test_the_constants_are_part_of_the_best_parameters(self, case) -> None:
+        from shipvision.tune.objective import Objective
+
+        space = SearchSpace("sort", (IntRange("max_age", 5, 60),), constants={"min_hits": 1})
+
+        result = run_study("sort", [case], space=space, trials=4, seed=7, prune=False)
+
+        assert result.best_params["min_hits"] == 1
+        # The reported best is the score of the configuration that won, re-run as it ran.
+        rescored = Objective("sort", (case,), space=space).run(dict(result.best_params))
+        assert rescored.score("HOTA") == pytest.approx(result.best.score("HOTA"))
+
+    def test_a_constant_that_makes_the_default_invalid_does_not_fail_the_study(
+        self, case
+    ) -> None:
+        """Every trial is valid (0.6..0.9 < 0.95); only the re-score without the constant
+        built `track_threshold=0.5` under a sampled `low_threshold` of 0.8 and raised."""
+        space = SearchSpace(
+            "bytetrack",
+            (FloatRange("low_threshold", 0.6, 0.9),),
+            constants={"track_threshold": 0.95},
+        )
+
+        result = run_study("bytetrack", [case], space=space, trials=4, seed=3, prune=False)
+
+        assert result.invalid == 0
+        assert result.trials == 4
+        assert result.best_params["track_threshold"] == 0.95
+
+    def test_a_resumed_study_tallies_its_invalid_trials_as_invalid_not_pruned(
+        self, case, tmp_path
+    ) -> None:
+        """The three tallies are read from the same trials, so a study resumed from storage
+        reports its earlier invalid trials as invalid — not, as before, as pruned."""
+        storage = f"sqlite:///{tmp_path / 'study.db'}"
+        mostly_invalid = SearchSpace(
+            "bytetrack",
+            (FloatRange("low_threshold", 0.05, 0.9),),
+            constants={"track_threshold": 0.5, "min_hits": 1},
+        )
+        first = run_study(
+            "bytetrack",
+            [case],
+            space=mostly_invalid,
+            trials=8,
+            seed=2,
+            prune=False,
+            storage=storage,
+            study_name="resumed",
+        )
+        second = run_study(
+            "bytetrack",
+            [case],
+            space=mostly_invalid,
+            trials=4,
+            seed=5,
+            prune=False,
+            storage=storage,
+            study_name="resumed",
+        )
+
+        assert first.trials + first.invalid == 8
+        assert second.trials + second.invalid == 12  # cumulative, like `trials` always was
+        assert second.invalid >= first.invalid
+        assert second.pruned == 0  # nothing was pruned; invalid is a different event

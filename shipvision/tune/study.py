@@ -119,6 +119,10 @@ class StudyResult:
         )
 
 
+#: Set on a trial whose configuration the tracker refused, so the tally survives a resume.
+INVALID_ATTR = "shipvision.invalid"
+
+
 def run_study(
     tracker: str,
     cases: Sequence[EvaluationCase],
@@ -178,7 +182,6 @@ def run_study(
         threshold=threshold,
         backend=backend,
     )
-    counters = {"pruned": 0, "invalid": 0}
 
     def wrapped(trial: Any) -> float:
         def report(step: int, running: SequenceResult) -> None:
@@ -194,8 +197,13 @@ def run_study(
         except ConfigurationError as error:
             # A configuration the tracker refuses is not a failed study, it is a corner of the
             # space. Counted, so a space that is mostly invalid cannot hide behind a best
-            # trial found in its usable sliver.
-            counters["invalid"] += 1
+            # trial found in its usable sliver. Recorded *on the trial*, not in a counter in
+            # this frame: a study resumed from storage carries every earlier trial, and a
+            # counter that covered this call alone made the previous call's invalid trials read
+            # as pruned. The tag travels with the trial, so the three tallies below always
+            # describe the same set — and there is no shared counter for `n_jobs` threads to
+            # race on.
+            trial.set_user_attr(INVALID_ATTR, str(error))
             raise optuna.TrialPruned(str(error)) from error
         return result.score(metric)
 
@@ -213,11 +221,15 @@ def run_study(
     )
     study.optimize(wrapped, n_trials=trials, n_jobs=jobs, timeout=timeout, gc_after_trial=True)
 
+    # Cumulative over the study — a resumed study reports everything it holds — and the three
+    # tallies are read from the same trials, so they cannot disagree with each other.
     completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
-    counters["pruned"] = (
-        sum(1 for t in study.trials if t.state == optuna.trial.TrialState.PRUNED)
-        - counters["invalid"]
-    )
+    invalid = sum(1 for t in study.trials if INVALID_ATTR in t.user_attrs)
+    counters = {
+        "invalid": invalid,
+        "pruned": sum(1 for t in study.trials if t.state == optuna.trial.TrialState.PRUNED)
+        - invalid,
+    }
     if not completed:
         raise ConfigurationError(
             f"no trial of {tracker!r} completed: {counters['invalid']} were configurations the "
@@ -226,12 +238,20 @@ def run_study(
         )
 
     best = study.best_trial
+    # Optuna records the names it was asked to suggest, so `best.params` is the sampled half of
+    # the configuration the trial actually ran; the constants are the other half. Re-scoring
+    # the sampled half alone built a *different* tracker — the shipped default where a constant
+    # had pinned a value — so `best_score` was a number no trial produced, `improvement`
+    # compared it against a baseline that did carry the constants, and a constant that made
+    # the default invalid (`track_threshold=0.95` with the default `low_threshold`) raised
+    # here, after every trial had been paid for. Constants win on a clash, as in `suggest()`.
+    best_parameters = {**dict(best.params), **dict(objective.search_space.constants)}
     return StudyResult(
         tracker=tracker,
         metric=metric,
         baseline=objective.baseline(),
-        best=objective.run(dict(best.params)).renamed("best"),
-        best_params=dict(best.params),
+        best=objective.run(best_parameters).renamed("best"),
+        best_params=best_parameters,
         trials=len(completed),
         pruned=max(0, counters["pruned"]),
         invalid=counters["invalid"],
