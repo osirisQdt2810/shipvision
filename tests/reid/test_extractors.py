@@ -829,3 +829,79 @@ class TestTheMockOnlySeparatesStructure:
             "fixture needs high-frequency content. Textured crops of six different objects "
             "stay under 0.5 in the test above — same extractor, same bandwidth"
         )
+
+
+class TestArgumentsAreCheckedBeforeTheRuntimeIsRequired:
+    """The same bad argument must be the same typed error on every machine.
+
+    This is not a style preference. Checking arguments is pure logic and answers identically
+    everywhere; requiring a runtime answers differently depending on what is installed. With
+    the runtime check first, `batch_size=-1` raised `ConfigurationError` on a developer's box
+    and `BackendUnavailableError` on CI — so a config typo was undiscoverable in the one place
+    that runs on every push, and the argument-validation test above went green locally and red
+    on the runner.
+
+    These hide the module rather than asking whether it is installed, because a suite that
+    skips when torch is absent cannot check the absent case at all — and the absent case is
+    the one that broke.
+    """
+
+    @pytest.fixture
+    def without(self, monkeypatch):
+        """Make ``import <name>`` fail the way a machine without the extra does."""
+
+        def hide(name: str) -> None:
+            class Blocker:
+                def find_spec(self, fullname, path=None, target=None):
+                    # Returning None would mean "not mine, ask the next finder", which is
+                    # exactly what must not happen — the real torch is installed here.
+                    if fullname == name or fullname.startswith(f"{name}."):
+                        raise ImportError(f"No module named {fullname!r}")
+                    return None  # noqa: RET501 - the finder protocol requires it
+
+            monkeypatch.setattr(sys, "meta_path", [Blocker(), *sys.meta_path])
+            for module in [m for m in sys.modules if m == name or m.startswith(f"{name}.")]:
+                monkeypatch.delitem(sys.modules, module)
+
+        return hide
+
+    def test_the_fixture_really_hides_the_module(self, without) -> None:
+        """Checked first, because every test below is vacuous if this does not work — and a
+        hidden-import fixture that quietly fails is the most convincing kind of green."""
+        without("torch")
+
+        with pytest.raises(ImportError):
+            import torch  # noqa: F401
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"batch_size": -1}, {"batch_size": 0}, {"channels": 0}, {"input_size": (0, 8)}],
+    )
+    def test_a_bad_argument_is_a_configuration_error_with_torch_absent(
+        self, without, kwargs: dict, tmp_path
+    ) -> None:
+        without("torch")
+        from shipvision.reid.extractors.torch_extractor import TorchExtractor
+
+        arguments = {"path": tmp_path / "absent.ts", "input_size": (8, 8), **kwargs}
+        with pytest.raises(ConfigurationError):
+            TorchExtractor(**arguments)
+
+    def test_good_arguments_still_report_the_missing_runtime(self, without, tmp_path) -> None:
+        """The other half. Validating first must not swallow "this machine cannot run it" —
+        that is the error an operator acts on, and it stays a `BackendUnavailableError`."""
+        without("torch")
+        from shipvision.reid.extractors.torch_extractor import TorchExtractor
+
+        with pytest.raises(BackendUnavailableError, match="needs torch"):
+            TorchExtractor(path=tmp_path / "absent.ts", input_size=(8, 8))
+
+    @pytest.mark.parametrize("kwargs", [{"device": -1}, {"max_batch": 0}])
+    def test_the_tensorrt_extractor_follows_the_same_rule(
+        self, without, kwargs: dict, tmp_path
+    ) -> None:
+        without("tensorrt")
+        from shipvision.reid.extractors.tensorrt_extractor import TensorRTExtractor
+
+        with pytest.raises(ConfigurationError):
+            TensorRTExtractor(path=tmp_path / "absent.plan", **kwargs)

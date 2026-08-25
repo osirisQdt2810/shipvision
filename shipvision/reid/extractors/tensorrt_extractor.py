@@ -86,11 +86,15 @@ class TensorRTExtractor(FeatureExtractor):
         device: int = 0,
         max_batch: int | None = None,
     ) -> None:
-        trt, torch = _require_runtime()
+        # Arguments before the runtime: see the note in `torch_extractor.py`. A negative
+        # `device` is the caller's mistake whether or not TensorRT is installed, and it must
+        # be reported the same way on a runner with neither.
         if device < 0:
             raise ConfigurationError(f"device must be a non-negative ordinal, got {device}")
         if max_batch is not None and max_batch <= 0:
             raise ConfigurationError(f"max_batch must be positive, got {max_batch}")
+
+        trt, torch = _require_runtime()
         if not torch.cuda.is_available():
             raise BackendUnavailableError(
                 "tensorrt needs a CUDA device and torch reports none; this is a deployment "

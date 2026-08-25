@@ -100,17 +100,19 @@ class TorchDetector(ArtefactDetector):
         max_batch: int = 1,
         **kwargs: Any,
     ) -> None:
+        # Arguments before the runtime: see the note in `reid/extractors/torch_extractor.py`.
+        extent = tuple(int(v) for v in input_hw)
+        if len(extent) != 2 or extent[0] <= 0 or extent[1] <= 0:
+            raise ConfigurationError(
+                f"input_hw must be (height, width) with positive values, got {input_hw!r}"
+            )
+
         torch = _require_torch()
         self._torch = torch
         self.path = Path(path)
         self.device = device
         self.half = bool(half)
 
-        extent = tuple(int(v) for v in input_hw)
-        if len(extent) != 2 or extent[0] <= 0 or extent[1] <= 0:
-            raise ConfigurationError(
-                f"input_hw must be (height, width) with positive values, got {input_hw!r}"
-            )
         if not self.path.is_file():
             raise ModelLoadError(f"no TorchScript artefact at {self.path}")
 

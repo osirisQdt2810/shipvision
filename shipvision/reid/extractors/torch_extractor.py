@@ -88,8 +88,12 @@ class TorchExtractor(FeatureExtractor):
         half: bool = False,
         channels: int = 3,
     ) -> None:
-        torch = _require_torch()
-
+        # Arguments first, runtime second, and the order is load-bearing rather than tidy.
+        # Checking the arguments is pure logic and gives the same answer on every machine, so
+        # putting it behind an import makes a config typo undiscoverable anywhere torch is not
+        # installed — which is CI, and which is exactly where you want to find one. Reversed,
+        # this raised `BackendUnavailableError` for `batch_size=-1` on the runner and
+        # `ConfigurationError` for the same call on a developer's box.
         if batch_size <= 0:
             raise ConfigurationError(f"batch_size must be positive, got {batch_size}")
         if channels <= 0:
@@ -99,6 +103,8 @@ class TorchExtractor(FeatureExtractor):
             raise ConfigurationError(
                 f"input_size must be (height, width) with positive values, got {input_size}"
             )
+
+        torch = _require_torch()
 
         self.path = Path(path)
         self.input_size: tuple[int, int] = (size[0], size[1])
