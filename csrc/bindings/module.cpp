@@ -165,11 +165,28 @@ namespace {
     }
 
     /// Fused pre/post-processing bound to one device.
+    /// Binds the calling thread to a device — as a *member*, so that it runs first.
+    ///
+    /// This exists because of an ordering rule that reads as pedantry until it costs a day.
+    /// Members are constructed in declaration order, before the constructor body runs. The
+    /// staging ring below creates three CUDA events in *its* constructor, and an event belongs
+    /// to whichever device is current when it is created. With `gpuSetDevice` in the body,
+    /// the events were created on the thread's default device — 0 — and then recorded on this
+    /// instance's stream on device 5, which CUDA reports as `invalid resource handle`. Every
+    /// letterbox on a non-zero device failed, from the first frame, while `crop_batch` and
+    /// `nms` — which never record the slot event — worked, so the failure looked like a
+    /// letterbox bug and was a construction-order bug. Declaring this before `ring_` is what
+    /// makes the fix a guarantee of the language rather than a comment asking to be kept.
+    struct BoundDevice {
+        explicit BoundDevice(int device_index) {
+            shipvision::check(gpuSetDevice(device_index), "gpuSetDevice");
+        }
+    };
+
     class ImageOps {
         public:
-            explicit ImageOps(int device_index) : device_index_(device_index) {
-                shipvision::check(gpuSetDevice(device_index_), "gpuSetDevice");
-            }
+            explicit ImageOps(int device_index)
+                : device_index_(device_index), bound_(device_index) {}
 
             int device_index() const { return device_index_; }
 
@@ -806,6 +823,7 @@ namespace {
             }
 
             int device_index_;
+            BoundDevice bound_;  ///< MUST precede ring_: its events are created on the current device
             StagingRing ring_;  ///< rotated per call, so reuse never races a live copy
             shipvision::DeviceScratch output_;     ///< host-returning entry points only
             shipvision::DeviceScratch nms_boxes_;  ///< score-sorted boxes for one NMS call
