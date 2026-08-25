@@ -501,6 +501,140 @@ class ImageOps(abc.ABC):
             f"native backend"
         )
 
+    # -- letterbox from a decoder's NV12 ----------------------------------------------
+
+    # NV12 is the format a hardware decoder actually produces, so this is the path that
+    # avoids a colour conversion into a buffer twice the size — and, when the decoder's
+    # output stays on the device, avoids host memory entirely. Read
+    # :mod:`shipvision.imgproc.colour` for the four conventions it turns on: nearest chroma,
+    # BT.601 limited range, convert-then-interpolate, and the stride carried as data.
+    #
+    # Not abstract, for the same reason `letterbox_into` is not: the torch backend has no
+    # NV12 path and should not have to write a raising stub to say so.
+
+    def nv12_letterbox(
+        self,
+        frames: Sequence[np.ndarray],
+        widths: Sequence[int],
+        target_hw: tuple[int, int],
+        *,
+        pad_value: int = DEFAULT_PAD_VALUE,
+        mean: Sequence[float] | None = None,
+        std: Sequence[float] | None = None,
+        swap_rb: bool = True,
+    ) -> tuple[np.ndarray, list[LetterboxGeometry]]:
+        """:meth:`letterbox`, reading NV12 straight from a decoder instead of BGR.
+
+        Args:
+            frames: one ``(height * 3 // 2, stride)`` uint8 NV12 buffer per image — luma rows
+                then interleaved chroma rows, which is one allocation and exactly what a
+                decoder hands over. The batch may be ragged.
+            widths: the *visible* width of each frame. Required because a decoder pads rows,
+                so the stride in ``frames[i].shape[1]`` is an upper bound and not the width.
+            target_hw: the network input extent, ``(height, width)``.
+            pad_value: fill for the letterbox bars, in the 0-255 source scale.
+            mean: per-channel mean in the 0-255 source scale, in **destination** channel
+                order. ``None`` -> zeros.
+            std: per-channel divisor, same scale and order. ``None`` -> 255.
+            swap_rb: ``True`` (the default) emits RGB, ``False`` emits BGR. The NV12 decode
+                produces RGB, so this names the destination order exactly as it does on the
+                BGR path — it is not an extra operation.
+
+        Returns:
+            ``(n, 3, target_h, target_w)`` float32 and one
+            :class:`~shipvision.imgproc.geometry.LetterboxGeometry` per frame, identical in
+            every convention to :meth:`letterbox` so a model cannot tell which fed it.
+
+        Raises:
+            BackendUnavailableError: this backend has no NV12 path.
+            DimensionMismatchError: a frame that is not a valid NV12 buffer, or an odd extent.
+        """
+        raise BackendUnavailableError(
+            f"the {getattr(self, 'backend', type(self).__name__)!r} image-ops backend has no "
+            f"NV12 path; use the 'python' backend for the reference implementation or build "
+            f"the native one for the fused kernel"
+        )
+
+    def nv12_letterbox_into(
+        self,
+        frames: Sequence[np.ndarray],
+        widths: Sequence[int],
+        target_hw: tuple[int, int],
+        out: DeviceBuffer,
+        *,
+        pad_value: int = DEFAULT_PAD_VALUE,
+        mean: Sequence[float] | None = None,
+        std: Sequence[float] | None = None,
+        swap_rb: bool = True,
+    ) -> list[LetterboxGeometry]:
+        """:meth:`nv12_letterbox`, written straight into ``out``. See :meth:`letterbox_into`."""
+        raise BackendUnavailableError(
+            f"the {getattr(self, 'backend', type(self).__name__)!r} image-ops backend has no "
+            f"NV12 device output path; ask supports_nv12 before calling this"
+        )
+
+    def nv12_letterbox_device_into(
+        self,
+        descriptors: np.ndarray,
+        target_hw: tuple[int, int],
+        out: DeviceBuffer,
+        *,
+        pad_value: int = DEFAULT_PAD_VALUE,
+        mean: Sequence[float] | None = None,
+        std: Sequence[float] | None = None,
+        swap_rb: bool = True,
+    ) -> list[LetterboxGeometry]:
+        """The zero-copy path: NV12 frames already on the device, letterboxed in place.
+
+        Nothing crosses PCIe. This is what a GPU decoder's output should reach, and the whole
+        reason the NV12 conventions are written down: the alternative is a 6.2 MB download of
+        a converted frame followed by a 6.2 MB upload of the same pixels.
+
+        Args:
+            descriptors: ``(n, 6)`` int64 —
+                ``[y_ptr, uv_ptr, height, width, y_stride, uv_stride]``. One array rather
+                than a list of tuples because this is the dispatch path and a caller reuses
+                it, so a frame costs no allocation.
+            target_hw: the network input extent.
+            out: a caller-owned device allocation of at least
+                ``nchw_nbytes(len(descriptors), target_hw)`` bytes, on this instance's device.
+            pad_value: as :meth:`nv12_letterbox`.
+            mean: as :meth:`nv12_letterbox`.
+            std: as :meth:`nv12_letterbox`.
+            swap_rb: as :meth:`nv12_letterbox`.
+
+        Returns:
+            One geometry per frame, in input order.
+
+        Raises:
+            BackendUnavailableError: this backend has no device NV12 path.
+            ConfigurationError: ``out`` is too small or on another device.
+        """
+        raise BackendUnavailableError(
+            f"the {getattr(self, 'backend', type(self).__name__)!r} image-ops backend cannot "
+            f"read device memory; build the native backend"
+        )
+
+    @property
+    def supports_nv12(self) -> bool:
+        """Whether :meth:`nv12_letterbox` works on this instance.
+
+        Asked rather than inferred from a backend name, for the same reason as
+        :attr:`supports_device_output`: an ingest path that has NV12 in hand should be able to
+        prefer it and fall back to converting, without holding a table of which backend does
+        what.
+        """
+        return False
+
+    @property
+    def supports_nv12_device_input(self) -> bool:
+        """Whether :meth:`nv12_letterbox_device_into` works on this instance.
+
+        Separate from :attr:`supports_nv12` because they are separate capabilities: the numpy
+        oracle can read NV12 and can never read a device pointer.
+        """
+        return False
+
     # -- post-processing --------------------------------------------------------------
 
     @abc.abstractmethod

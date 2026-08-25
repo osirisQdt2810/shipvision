@@ -11,7 +11,12 @@ import numpy as np
 import pytest
 
 from shipvision.errors import ConfigurationError
-from shipvision.tracking.association import dynamic_appearance_momentum, isolation
+from shipvision.tracking.association import (
+    appearance_cost,
+    dynamic_appearance_momentum,
+    isolation,
+    pairwise_appearance,
+)
 
 
 def _box(cx: float, w: float = 60.0, h: float = 140.0) -> list[float]:
@@ -110,3 +115,73 @@ class TestDynamicAppearanceMomentum:
             dynamic_appearance_momentum(
                 np.array([_box(400), _box(900)], np.float32), np.array([0.9], np.float32)
             )
+
+
+class TestPairwiseAppearance:
+    """ "Is there appearance evidence on this frame at all" — answered in one place.
+
+    BoT-SORT and DeepSORTv2 both need it, so it lives here rather than in either algorithm's
+    ``utils.py``. The two had the same six lines each, and the day one of them changed what
+    "no appearance" means, the two trackers would have started disagreeing about it while both
+    still passed every test they own.
+    """
+
+    @staticmethod
+    def _unit(rng: np.random.Generator, n: int) -> np.ndarray:
+        vectors = rng.normal(size=(n, 8)).astype(np.float32)
+        return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+
+    def test_it_scores_only_the_requested_rows(self) -> None:
+        rng = np.random.default_rng(11)
+        tracks, detections = self._unit(rng, 4), self._unit(rng, 3)
+
+        cost = pairwise_appearance(tracks, [2, 0], list(detections))
+
+        assert cost is not None
+        assert cost.shape == (2, 3)
+        np.testing.assert_allclose(cost, appearance_cost(tracks[[2, 0]], detections), atol=1e-6)
+
+    def test_a_pool_with_no_embeddings_yields_none_rather_than_zeros(self) -> None:
+        """The distinction this function exists for. A zero cost means "identical
+        appearance", which is the strongest claim available; returning it because nobody
+        supplied a vector would make every pair a perfect appearance match on no evidence,
+        and the caller would fuse that into its cost and believe it."""
+        rng = np.random.default_rng(12)
+
+        assert pairwise_appearance(None, [0, 1], list(self._unit(rng, 2))) is None
+
+    def test_one_missing_detection_vector_disables_the_whole_matrix(self) -> None:
+        """All-or-nothing on purpose: a partially-populated matrix has to invent a value for
+        the missing pairs, and any value invented there is a claim about identity."""
+        rng = np.random.default_rng(13)
+        tracks, detections = self._unit(rng, 2), list(self._unit(rng, 3))
+        detections[1] = None
+
+        assert pairwise_appearance(tracks, [0, 1], detections) is None
+
+    def test_both_trackers_that_need_it_get_the_same_answer(self) -> None:
+        """The claim that BoT-SORT and DeepSORTv2 share one definition, checked rather than
+        asserted in a docstring: their cost functions must fall back identically."""
+        from shipvision.tracking.core.botsort.utils import first_cost
+        from shipvision.tracking.core.deepsortv2.utils import stage_b_cost
+
+        boxes = np.array([_box(100.0), _box(300.0)], np.float32)
+        detections = np.array([_box(105.0), _box(305.0)], np.float32)
+        passing = np.zeros((2, 2), np.float32)
+
+        botsort_without = first_cost(
+            boxes,
+            detections,
+            appearance=None,
+            motion_gate=0.8,
+            appearance_gate=0.25,
+            appearance_weight=0.5,
+            gating_distances=passing,
+        )
+        deepsort_without = stage_b_cost(
+            boxes, detections, appearance=None, appearance_gate=0.25, gating_distances=passing
+        )
+
+        # Both fall back to the same plain geometric cost when there is no evidence, which is
+        # the behaviour that would silently diverge if each kept its own copy of the rule.
+        np.testing.assert_allclose(botsort_without, deepsort_without, atol=1e-6)

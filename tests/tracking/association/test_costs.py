@@ -17,11 +17,13 @@ from shipvision.tracking.association import (
     direction_cost,
     fuse_score,
     gate_cost,
+    gated_iou_cost,
     giou_cost,
     giou_matrix,
     iou_cost,
     min_fuse,
 )
+from shipvision.tracking.motion.kalman import CHI2_INV_95_4DOF
 
 
 def _box(x1: float, y1: float, x2: float, y2: float) -> list[float]:
@@ -244,3 +246,81 @@ class TestDirectionCost:
             np.zeros((0, 4), np.float32),
             np.ones((3, 4), np.float32),
         ).shape == (0, 3)
+
+
+class TestGatedIouCost:
+    """``1 - IoU`` plus an optional motion veto: the composition SORT and ByteTrack's second
+    stage both are.
+
+    It lives in ``association/`` rather than in either algorithm's ``utils.py`` because two
+    copies of it is how the baseline and the tracker measured against it drift apart: someone
+    tightens a gate in one, both keep passing every test they have, and the comparison the two
+    exist to support quietly stops being a comparison.
+    """
+
+    def test_without_a_gate_it_is_exactly_the_iou_cost(self) -> None:
+        tracks = np.array([_box(0, 0, 10, 10), _box(20, 20, 30, 30)], np.float32)
+        detections = np.array([_box(0, 0, 10, 10), _box(5, 0, 15, 10)], np.float32)
+
+        np.testing.assert_array_equal(
+            gated_iou_cost(tracks, detections, threshold=9.4877),
+            iou_cost(tracks, detections),
+        )
+
+    def test_a_pair_the_filter_refuses_becomes_unselectable(self) -> None:
+        """A perfect overlap the motion model calls impossible must not be selectable at any
+        price. Leaving it selectable is how one crowded frame hands an identity to the wrong
+        object, and an ID switch does not recover the way a missed frame does."""
+        tracks = np.array([_box(0, 0, 10, 10)], np.float32)
+        detections = np.array([_box(0, 0, 10, 10), _box(0, 0, 10, 10)], np.float32)
+        distances = np.array([[0.5, 99.0]], np.float32)
+
+        cost = gated_iou_cost(tracks, detections, gating_distances=distances, threshold=9.4877)
+
+        assert cost[0, 0] == pytest.approx(0.0)
+        assert cost[0, 1] == INFEASIBLE
+
+    def test_no_gate_and_an_all_passing_gate_are_different_calls_with_the_same_answer(
+        self,
+    ) -> None:
+        """``None`` means "the gate is off", which is a different state from "the gate passed
+        everything" — the caller who switched gating off should not have to compute the
+        distances first. The two agree numerically, and that is what makes the cheaper call
+        safe to make."""
+        tracks = np.array([_box(0, 0, 10, 10)], np.float32)
+        detections = np.array([_box(0, 0, 10, 10), _box(5, 0, 15, 10)], np.float32)
+        passing = np.zeros((1, 2), np.float32)
+
+        np.testing.assert_allclose(
+            gated_iou_cost(tracks, detections, threshold=9.4877),
+            gated_iou_cost(tracks, detections, gating_distances=passing, threshold=9.4877),
+        )
+
+    def test_the_threshold_has_no_default(self) -> None:
+        """The chi-square value belongs to the filter that produced the distances, so
+        ``association`` does not carry one — a default here would outlive a change to the
+        state dimension and gate on the wrong number without saying so."""
+        tracks = np.array([_box(0, 0, 10, 10)], np.float32)
+
+        with pytest.raises(TypeError, match="threshold"):
+            gated_iou_cost(tracks, tracks)  # type: ignore[call-arg]
+
+    def test_it_is_what_both_callers_actually_call(self) -> None:
+        """The claim that the two algorithms share one implementation, checked rather than
+        asserted in a docstring."""
+        from shipvision.tracking.core.bytetrack.utils import low_score_cost
+        from shipvision.tracking.core.sort.utils import association_cost
+
+        tracks = np.array([_box(0, 0, 10, 10), _box(20, 20, 30, 30)], np.float32)
+        detections = np.array([_box(2, 0, 12, 10), _box(21, 20, 31, 30)], np.float32)
+        distances = np.array([[0.5, 99.0], [99.0, 0.5]], np.float32)
+
+        expected = gated_iou_cost(
+            tracks, detections, gating_distances=distances, threshold=CHI2_INV_95_4DOF
+        )
+        np.testing.assert_array_equal(
+            association_cost(tracks, detections, gating_distances=distances), expected
+        )
+        np.testing.assert_array_equal(
+            low_score_cost(tracks, detections, gating_distances=distances), expected
+        )

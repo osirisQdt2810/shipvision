@@ -4,7 +4,7 @@ The decomposition is the reference's and it is worth keeping, because each seam 
 where a real question gets a separate answer:
 
 1. **Gate** — which tracks are worth asking about (:mod:`shipvision.mtmc.gating`).
-2. **Matrix** — how alike every pair is (:mod:`shipvision.mtmc.matrix`).
+2. **Match** — how alike every pair is (:mod:`shipvision.mtmc.core`).
 3. **Cluster** — which of them are the same object right now
    (:mod:`shipvision.mtmc.clustering`).
 4. **Identity** — and which object that is, across time
@@ -24,12 +24,12 @@ from collections.abc import Sequence
 import numpy as np
 
 from shipvision.errors import ConfigurationError
-from shipvision.mtmc.base import MTMC, BaseMTMCTracker
-from shipvision.mtmc.clustering import CLUSTERERS, BaseClusterer
+from shipvision.mtmc.base import BaseMatcher, BaseMTMCTracker
+from shipvision.mtmc.clustering import BaseClusterer
 from shipvision.mtmc.frames import FrameTrackCluster, TrackKey, TrackObservation
 from shipvision.mtmc.gating import ObservationGate
 from shipvision.mtmc.identity import GlobalIdAssigner
-from shipvision.mtmc.matrix import MATRIX_BUILDERS, BaseMatrixBuilder
+from shipvision.mtmc.registry import MTMC, MTMC_CLUSTERERS, MTMC_MATCHERS
 from shipvision.mtmc.topology import GroundPlane
 from shipvision.registry import PYTHON
 from shipvision.types import GlobalTrack
@@ -53,7 +53,7 @@ class ClusterMTMCTracker(BaseMTMCTracker):
     def __init__(
         self,
         *,
-        matrix_builder: str | BaseMatrixBuilder = "gated",
+        matrix_builder: str | BaseMatcher = "gated",
         clusterer: str | BaseClusterer = "agglomerative",
         ground_plane: GroundPlane | None = None,
         appearance_threshold: float = 0.86,
@@ -68,10 +68,14 @@ class ClusterMTMCTracker(BaseMTMCTracker):
     ) -> None:
         """
         Args:
-            matrix_builder: a name from :data:`shipvision.mtmc.matrix.MATRIX_BUILDERS`, or a
-                pre-built instance. The default, ``gated``, degrades to appearance-only when
-                no homographies are supplied, which is what makes it safe as a default.
-            clusterer: a name from :data:`shipvision.mtmc.clustering.CLUSTERERS`, or an
+            matrix_builder: a name from
+                :data:`~shipvision.mtmc.registry.MTMC_MATCHERS`, or a pre-built instance. The
+                default, ``gated``, degrades to appearance-only when no homographies are
+                supplied, which is what makes it safe as a default. The keyword kept its
+                original spelling when the family was renamed to *matcher*: it is the key a
+                deployment writes in config, and renaming a config key in a repackaging is a
+                breakage nobody gets anything for.
+            clusterer: a name from :data:`~shipvision.mtmc.registry.MTMC_CLUSTERERS`, or an
                 instance.
             ground_plane: the camera-to-map homographies. Ignored when ``matrix_builder`` is
                 already an instance — that instance has its own.
@@ -90,7 +94,7 @@ class ClusterMTMCTracker(BaseMTMCTracker):
                 registered. All of it at construction — a threshold typo must stop the
                 process at start-up, not at frame 40 000.
         """
-        self.builder = self._build_matrix_builder(
+        self.builder = self._build_matcher(
             matrix_builder,
             ground_plane=ground_plane,
             appearance_threshold=appearance_threshold,
@@ -109,21 +113,21 @@ class ClusterMTMCTracker(BaseMTMCTracker):
     # -- construction -------------------------------------------------------------------
 
     @staticmethod
-    def _build_matrix_builder(
-        spec: str | BaseMatrixBuilder,
+    def _build_matcher(
+        spec: str | BaseMatcher,
         *,
         ground_plane: GroundPlane | None,
         appearance_threshold: float,
         spatial_threshold: float,
-    ) -> BaseMatrixBuilder:
-        if isinstance(spec, BaseMatrixBuilder):
+    ) -> BaseMatcher:
+        if isinstance(spec, BaseMatcher):
             return spec
         if not isinstance(spec, str):
             raise ConfigurationError(
-                f"matrix_builder must be a registered name or a BaseMatrixBuilder, got "
+                f"matrix_builder must be a registered name or a BaseMatcher, got "
                 f"{type(spec).__name__}"
             )
-        # Pass only what the named builder actually accepts. Forwarding all three and
+        # Pass only what the named matcher actually accepts. Forwarding all three and
         # letting the constructor reject the surplus would make "appearance" — which has no
         # geometry and therefore no spatial threshold — unselectable from config.
         offered = {
@@ -131,9 +135,9 @@ class ClusterMTMCTracker(BaseMTMCTracker):
             "spatial_threshold": spatial_threshold,
             "ground_plane": ground_plane,
         }
-        accepted = inspect.signature(MATRIX_BUILDERS.get(spec).__init__).parameters
+        accepted = inspect.signature(MTMC_MATCHERS.get(spec).__init__).parameters
         options = {name: value for name, value in offered.items() if name in accepted}
-        return MATRIX_BUILDERS.build(spec, **options)
+        return MTMC_MATCHERS.build(spec, **options)
 
     @staticmethod
     def _build_clusterer(spec: str | BaseClusterer, distance_threshold: float) -> BaseClusterer:
@@ -144,7 +148,7 @@ class ClusterMTMCTracker(BaseMTMCTracker):
                 f"clusterer must be a registered name or a BaseClusterer, got "
                 f"{type(spec).__name__}"
             )
-        return CLUSTERERS.build(spec, distance_threshold=distance_threshold)
+        return MTMC_CLUSTERERS.build(spec, distance_threshold=distance_threshold)
 
     # -- the frame path -----------------------------------------------------------------
 
@@ -172,7 +176,7 @@ class ClusterMTMCTracker(BaseMTMCTracker):
     def _cluster(self, admitted: Sequence[TrackObservation]) -> np.ndarray:
         """Labels for the admitted observations.
 
-        Nothing to compare below two tracks, so the matrix builder and the clusterer are
+        Nothing to compare below two tracks, so the matcher and the clusterer are
         skipped rather than called with a degenerate input. That is not an optimisation: a
         1x1 distance matrix is a perfectly valid thing to hand scipy and it will refuse it,
         and one visible track is the normal state of a quiet site.

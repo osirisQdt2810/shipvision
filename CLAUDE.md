@@ -68,12 +68,14 @@ inner loops where a Python call per track is the frame budget. Nothing else.
   list — a dropped frame, a saturated queue and a dead GPU are three different events.
 - **Nothing grows without bound.** Galleries, track pools and MTMC global-id maps all take a
   capacity and state what they evict. A process here runs for weeks.
-- **C++: `gpu*` aliases from `core/platform.hpp` only.** A raw `cudaMalloc` breaks the ROCm
+- **C++: `gpu*` aliases from `core/platform.h` only.** A raw `cudaMalloc` breaks the ROCm
   build silently — `tests/test_architecture.py::TestVendorApiBoundary` is the guard, and it
   strips comments first so prose explaining *why* an alias exists is allowed. Release the GIL
   around launches — a library transforms data, it is not where GIL policy belongs.
-- **C++ style** (`.clang-format`): `NamespaceIndentation: All`, `IndentAccessModifiers: true`,
-  `PointerAlignment: Left` — so `float* dst`, not `float *dst`.
+- **C++ style** (`.clang-format`, Google base, 4-space indent, 100 columns):
+  `NamespaceIndentation: All`, `IndentPPDirectives: BeforeHash`, `IndentAccessModifiers: true`,
+  `PointerAlignment: Left` — so `float* dst`, not `float *dst`. Run it via `pre-commit`; the
+  version is pinned there because clang-format's output changes between releases.
 - English for all documentation, comments and commit messages.
 
 ## Layout
@@ -90,10 +92,11 @@ shipvision/            the Python package, at the repository root
 ├── mtmc/              @MTMC      matrix builders, clustering, topology, global id
 ├── tune/              Optuna search spaces + objectives
 └── eval/              HOTA/MOTA/IDF1 for MOT and MTMC; CMC/mAP for re-ID
-csrc/
-├── include/shipvision/{core,imgproc,detection,reid,tracking,mtmc}/
-├── src/*.cu           one tree, compiled by CUDA or HIP
-└── bindings/          pybind11 → shipvision._C
+csrc/                  the include root, so `#include "shipvision/..."` reads the same everywhere
+├── shipvision/        mirrors the package above: {core,imgproc,detection,reid,tracking,mtmc}/
+│                      a header sits NEXT TO its translation unit, and it is `.h`, never `.hpp`
+│                      e.g. imgproc/image_ops.h + imgproc/image_ops.cu, one tree for CUDA or HIP
+└── bindings/          pybind11 → shipvision._C; the one place that may touch the GIL
 ```
 
 ## Adding an algorithm

@@ -46,6 +46,7 @@ from shipvision.imgproc.base import (
     validate_image,
     validate_pad_value,
 )
+from shipvision.imgproc.colour import nv12_height, validate_nv12_frame
 from shipvision.imgproc.geometry import LetterboxGeometry, validate_target_hw
 from shipvision.imgproc.nms import CLASSIC, prepare, suppress
 from shipvision.imgproc.registry import IMGPROC
@@ -88,7 +89,7 @@ class NativeImageOps(ImageOps):
 
     One instance owns one device index and one staging ring, so it belongs to one worker
     thread for the life of the process. Sharing it between threads races the ring, and the
-    result is plausible-looking output from the wrong frame — see ``csrc/core/buffers.hpp``.
+    result is plausible-looking output from the wrong frame — see ``csrc/shipvision/core/buffers.h``.
 
     That last sentence used to be the whole enforcement. It is now checked: the first thread
     to *use* an instance claims it, and a call from any other raises
@@ -287,6 +288,137 @@ class NativeImageOps(ImageOps):
         _assert_geometry_agrees(geometries, scales, pads, extents)
         return geometries
 
+    # -- letterbox from a decoder's NV12 ----------------------------------------------
+
+    @property
+    def supports_nv12(self) -> bool:
+        """Always, for this backend: the fused NV12 kernel is why it exists."""
+        return True
+
+    @property
+    def supports_nv12_device_input(self) -> bool:
+        """Always. :meth:`nv12_letterbox_device_into` is the only zero-PCIe path here."""
+        return True
+
+    def nv12_letterbox(
+        self,
+        frames: Sequence[np.ndarray],
+        widths: Sequence[int],
+        target_hw: tuple[int, int],
+        *,
+        pad_value: int = DEFAULT_PAD_VALUE,
+        mean: Sequence[float] | None = None,
+        std: Sequence[float] | None = None,
+        swap_rb: bool = True,
+    ) -> tuple[np.ndarray, list[LetterboxGeometry]]:
+        """See :meth:`ImageOps.nv12_letterbox`."""
+        self._claim_thread()
+        buffers, visible = _validate_nv12_batch(frames, widths)
+        target_h, target_w = validate_target_hw(target_hw)
+        mean_array, std_array = resolve_normalisation(mean, std)
+        pad_value = validate_pad_value(pad_value)
+
+        tensor, scales, pads, extents = self._ops.nv12_letterbox_batch(
+            buffers,
+            visible,
+            target_h,
+            target_w,
+            mean_array.tolist(),
+            std_array.tolist(),
+            bool(swap_rb),
+            int(pad_value),
+            self._stream,
+        )
+        geometries = _nv12_geometries(buffers, visible, (target_h, target_w))
+        _assert_geometry_agrees(geometries, scales, pads, extents)
+        return np.asarray(tensor, dtype=np.float32), geometries
+
+    def nv12_letterbox_into(
+        self,
+        frames: Sequence[np.ndarray],
+        widths: Sequence[int],
+        target_hw: tuple[int, int],
+        out: DeviceBuffer,
+        *,
+        pad_value: int = DEFAULT_PAD_VALUE,
+        mean: Sequence[float] | None = None,
+        std: Sequence[float] | None = None,
+        swap_rb: bool = True,
+    ) -> list[LetterboxGeometry]:
+        """See :meth:`ImageOps.nv12_letterbox_into`."""
+        self._claim_thread()
+        buffers, visible = _validate_nv12_batch(frames, widths)
+        target_h, target_w = validate_target_hw(target_hw)
+        mean_array, std_array = resolve_normalisation(mean, std)
+        pad_value = validate_pad_value(pad_value)
+        out.require(nchw_nbytes(len(buffers), (target_h, target_w)), self._device_index)
+
+        scales, pads, extents = self._ops.nv12_letterbox_into(
+            buffers,
+            visible,
+            out.pointer,
+            out.nbytes,
+            target_h,
+            target_w,
+            mean_array.tolist(),
+            std_array.tolist(),
+            bool(swap_rb),
+            int(pad_value),
+            self._stream,
+        )
+        geometries = _nv12_geometries(buffers, visible, (target_h, target_w))
+        _assert_geometry_agrees(geometries, scales, pads, extents)
+        return geometries
+
+    def nv12_letterbox_device_into(
+        self,
+        descriptors: np.ndarray,
+        target_hw: tuple[int, int],
+        out: DeviceBuffer,
+        *,
+        pad_value: int = DEFAULT_PAD_VALUE,
+        mean: Sequence[float] | None = None,
+        std: Sequence[float] | None = None,
+        swap_rb: bool = True,
+    ) -> list[LetterboxGeometry]:
+        """See :meth:`ImageOps.nv12_letterbox_device_into`.
+
+        The descriptors are *not* validated against the device — a pointer from another
+        context is indistinguishable from one from this context, and a wrong one is a sticky
+        illegal access that ends the worker. What is checked is everything that can be: the
+        shape, positive even extents, strides at least the width, and non-null pointers.
+        """
+        self._claim_thread()
+        table = np.ascontiguousarray(np.asarray(descriptors, dtype=np.int64))
+        if table.ndim != 2 or table.shape[1] != 6:
+            raise ConfigurationError(
+                f"descriptors must be (n, 6) — [y_ptr, uv_ptr, height, width, y_stride, "
+                f"uv_stride] — got {table.shape}"
+            )
+        target_h, target_w = validate_target_hw(target_hw)
+        mean_array, std_array = resolve_normalisation(mean, std)
+        pad_value = validate_pad_value(pad_value)
+        out.require(nchw_nbytes(table.shape[0], (target_h, target_w)), self._device_index)
+
+        scales, pads, extents = self._ops.nv12_letterbox_device_into(
+            table,
+            out.pointer,
+            out.nbytes,
+            target_h,
+            target_w,
+            mean_array.tolist(),
+            std_array.tolist(),
+            bool(swap_rb),
+            int(pad_value),
+            self._stream,
+        )
+        geometries = [
+            LetterboxGeometry.plan((int(row[2]), int(row[3])), (target_h, target_w))
+            for row in table
+        ]
+        _assert_geometry_agrees(geometries, scales, pads, extents)
+        return geometries
+
     def crop_batch_into(
         self,
         image: np.ndarray,
@@ -381,6 +513,47 @@ class NativeImageOps(ImageOps):
             self._stream,
         )
         return np.asarray(kept, dtype=np.int64)
+
+
+def _validate_nv12_batch(
+    frames: Sequence[np.ndarray], widths: Sequence[int]
+) -> tuple[list[np.ndarray], list[int]]:
+    """Validate a ragged NV12 batch here, in Python, before any pointer reaches the kernel.
+
+    The C++ side checks the same things — it has to, since its entry points are reachable
+    without this — but doing it here first is what turns a caller's mistake into a readable
+    Python exception instead of an ``invalid_argument`` from a binding.
+    """
+    if len(frames) != len(widths):
+        raise ConfigurationError(
+            f"got {len(frames)} NV12 frames and {len(widths)} widths; a decoder's stride is "
+            f"not its visible width, so one width per frame is required"
+        )
+    if not frames:
+        raise ConfigurationError(
+            "nv12 letterbox needs at least one frame; an empty batch is a caller bug, not a "
+            "quiet camera"
+        )
+    buffers = [
+        validate_nv12_frame(frame, width, what=f"frames[{index}]")
+        for index, (frame, width) in enumerate(zip(frames, widths, strict=True))
+    ]
+    return buffers, [int(width) for width in widths]
+
+
+def _nv12_geometries(
+    buffers: Sequence[np.ndarray], widths: Sequence[int], target_hw: tuple[int, int]
+) -> list[LetterboxGeometry]:
+    """One geometry per NV12 frame, planned from the *visible* extent.
+
+    The height comes from the row count and not from the buffer's shape directly, because a
+    packed NV12 buffer has 1.5x the luma rows — planning against ``shape[0]`` would letterbox
+    a 1620-row image and every box would be scaled by 2/3.
+    """
+    return [
+        LetterboxGeometry.plan((nv12_height(int(buffer.shape[0])), int(width)), target_hw)
+        for buffer, width in zip(buffers, widths, strict=True)
+    ]
 
 
 def _assert_geometry_agrees(

@@ -20,10 +20,9 @@ component stops being shared.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 from collections import deque
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 
 import numpy as np
 

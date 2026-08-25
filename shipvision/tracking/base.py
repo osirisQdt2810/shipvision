@@ -24,12 +24,17 @@ from typing import TYPE_CHECKING, ClassVar
 import numpy as np
 
 from shipvision.errors import TrackingError
-from shipvision.registry import Registry
+from shipvision.tracking.registry import TRACKERS
 from shipvision.types import Detections, FrameTag, Track
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle avoidance, not a runtime dependency
     from shipvision.tracking.pool import TrackPool
 
+#: ``TRACKERS`` is a **compatibility re-export**, not a definition. It lived in this module
+#: until the algorithms became packages under ``core/`` and it now lives in
+#: :mod:`shipvision.tracking.registry`; listing it here keeps every
+#: ``from shipvision.tracking.base import TRACKERS`` in the wild resolving. Do not move the
+#: definition back: ``core/<algorithm>/tracker.py`` wants the decorator without the contract.
 __all__ = ["TRACKERS", "BaseTracker", "next_track_id"]
 
 _TRACK_IDS = itertools.count(1)
@@ -151,19 +156,3 @@ class BaseTracker(abc.ABC):
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.name}/{self.backend} tracks={self.pool_size}>"
-
-
-TRACKERS: Registry[BaseTracker] = Registry("tracker")
-"""Every tracker, keyed on ``(name, backend)``.
-
-A new tracker is a new file plus a decorator — never an edit to a switch statement. Selecting
-one by name from config is what lets a deployment A/B two association strategies on the same
-stream without a code change, which is the only honest way to decide between them. Every
-reference implementation this library replaces picks its tracker with a hand-written
-``if/elif``, and every one has the same consequence: the tracker that shipped first wins by
-default rather than by measurement.
-
-There is no ``native`` tracker yet. When there is, it registers here under the same name as
-its numpy twin and a parity test compares the two on one sequence — a compiled association
-loop nobody can compare against is a compiled association loop nobody can trust.
-"""

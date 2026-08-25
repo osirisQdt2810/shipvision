@@ -30,7 +30,8 @@ from typing import Any
 import numpy as np
 
 from shipvision.errors import BackendUnavailableError, ConfigurationError
-from shipvision.mtmc.clustering.base import CLUSTERERS, BaseClusterer
+from shipvision.mtmc.clustering.base import BaseClusterer
+from shipvision.mtmc.registry import MTMC_CLUSTERERS
 from shipvision.registry import PYTHON
 
 __all__ = ["AgglomerativeClusterer"]
@@ -48,7 +49,7 @@ def _load_scipy() -> tuple[Any, Any, Any]:
     return linkage, fcluster, squareform
 
 
-@CLUSTERERS.register("agglomerative", backend=PYTHON, aliases=("average_linkage", "aic"))
+@MTMC_CLUSTERERS.register("agglomerative", backend=PYTHON, aliases=("average_linkage", "aic"))
 class AgglomerativeClusterer(BaseClusterer):
     """Hierarchical clustering cut at a distance threshold."""
 

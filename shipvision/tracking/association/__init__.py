@@ -8,6 +8,7 @@ filter, the lifecycle, the camera) is shared.
 from shipvision.tracking.association.appearance import (
     dynamic_appearance_momentum,
     isolation,
+    pairwise_appearance,
 )
 from shipvision.tracking.association.costs import (
     INFEASIBLE,
@@ -15,6 +16,7 @@ from shipvision.tracking.association.costs import (
     direction_cost,
     fuse_score,
     gate_cost,
+    gated_iou_cost,
     giou_cost,
     giou_matrix,
     iou_cost,
@@ -36,9 +38,11 @@ __all__ = [
     "dynamic_appearance_momentum",
     "fuse_score",
     "gate_cost",
+    "gated_iou_cost",
     "giou_cost",
     "giou_matrix",
     "iou_cost",
     "isolation",
     "min_fuse",
+    "pairwise_appearance",
 ]

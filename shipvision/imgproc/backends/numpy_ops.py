@@ -1,7 +1,7 @@
 """The oracle: letterbox, crop and NMS in numpy, written to be read.
 
 Every other backend in this family is checked against this file, so it optimises for one
-thing — being obviously the same arithmetic as ``csrc/src/imgproc_image_ops.cu``, expression
+thing — being obviously the same arithmetic as ``csrc/shipvision/imgproc/image_ops.cu``, expression
 by expression, in the same float32. Where the kernel writes ``(y + 0.5f) * h / out_h -
 0.5f``, so does this; where it clamps a tap index rather than a coordinate, so does this. A
 tidier formulation that agreed to five decimal places instead of eight would make the parity
@@ -19,6 +19,7 @@ from collections.abc import Sequence
 
 import numpy as np
 
+from shipvision.errors import ConfigurationError
 from shipvision.imgproc.base import (
     DEFAULT_PAD_VALUE,
     ImageOps,
@@ -28,6 +29,7 @@ from shipvision.imgproc.base import (
     validate_image,
     validate_pad_value,
 )
+from shipvision.imgproc.colour import nv12_to_rgb
 from shipvision.imgproc.geometry import (
     LetterboxGeometry,
     clamp_boxes_to_frame,
@@ -78,6 +80,64 @@ class NumpyImageOps(ImageOps):
                 geometry.pad_top : geometry.pad_top + geometry.resized_height,
                 geometry.pad_left : geometry.pad_left + geometry.resized_width,
             ] = _to_nchw_rgb(resized, mean_array, std_array)
+        return out, geometries
+
+    @property
+    def supports_nv12(self) -> bool:
+        """Always: this is the NV12 oracle the kernel is checked against."""
+        return True
+
+    def nv12_letterbox(
+        self,
+        frames: Sequence[np.ndarray],
+        widths: Sequence[int],
+        target_hw: tuple[int, int],
+        *,
+        pad_value: int = DEFAULT_PAD_VALUE,
+        mean: Sequence[float] | None = None,
+        std: Sequence[float] | None = None,
+        swap_rb: bool = True,
+    ) -> tuple[np.ndarray, list[LetterboxGeometry]]:
+        """See :meth:`ImageOps.nv12_letterbox`.
+
+        Structured as convert-the-whole-frame then gather, where the kernel converts only the
+        four taps it needs. Convention 7 says the conversion happens before the blend, and
+        conversion is per-pixel, so the two are identical arithmetic in a different order —
+        which is the property that makes this an oracle rather than a second opinion.
+        """
+        if len(frames) != len(widths):
+            raise ConfigurationError(
+                f"got {len(frames)} NV12 frames and {len(widths)} widths; a decoder's stride "
+                f"is not its visible width, so one width per frame is required"
+            )
+        if not frames:
+            raise ConfigurationError(
+                "nv12 letterbox needs at least one frame; an empty batch is a caller bug"
+            )
+        target_h, target_w = validate_target_hw(target_hw)
+        mean_array, std_array = resolve_normalisation(mean, std)
+        pad_value = validate_pad_value(pad_value)
+
+        out = np.empty((len(frames), 3, target_h, target_w), dtype=np.float32)
+        bars = (np.float32(pad_value) - mean_array) / std_array
+        out[:] = bars[None, :, None, None]
+
+        geometries: list[LetterboxGeometry] = []
+        for index, (frame, width) in enumerate(zip(frames, widths, strict=True)):
+            rgb = nv12_to_rgb(frame, width)
+            geometry = LetterboxGeometry.plan(rgb.shape[:2], (target_h, target_w))
+            geometries.append(geometry)
+            resized = _gather_bilinear(
+                rgb,
+                resize_centres(rgb.shape[0], geometry.resized_height),
+                resize_centres(rgb.shape[1], geometry.resized_width),
+            )
+            out[
+                index,
+                :,
+                geometry.pad_top : geometry.pad_top + geometry.resized_height,
+                geometry.pad_left : geometry.pad_left + geometry.resized_width,
+            ] = _normalise_planar(resized, mean_array, std_array, swap_rb=swap_rb)
         return out, geometries
 
     def crop_batch(
@@ -184,6 +244,22 @@ def _gather_bilinear(source: np.ndarray, ys: np.ndarray, xs: np.ndarray) -> np.n
     top = top_left * (np.float32(1.0) - weight_x) + top_right * weight_x
     bottom = bottom_left * (np.float32(1.0) - weight_x) + bottom_right * weight_x
     return (top * (np.float32(1.0) - weight_y) + bottom * weight_y).astype(np.float32)
+
+
+def _normalise_planar(
+    values: np.ndarray, mean: np.ndarray, std: np.ndarray, *, swap_rb: bool
+) -> np.ndarray:
+    """``(..., h, w, 3)`` **RGB** source values -> ``(..., 3, h, w)`` normalised.
+
+    The counterpart of :func:`_to_nchw_rgb` for a path whose source is already RGB: the NV12
+    decode produces RGB, so ``swap_rb=True`` is the identity here and ``False`` is what asks
+    for BGR. ``mean`` and ``std`` are indexed by *destination* plane either way, which is the
+    one thing both paths must agree on — the kernel indexes them the same way, so a BGR
+    request with an RGB mean is wrong identically in both.
+    """
+    ordered = values if swap_rb else values[..., ::-1]
+    planar = np.moveaxis(ordered, -1, -3)
+    return ((planar - mean[:, None, None]) / std[:, None, None]).astype(np.float32)
 
 
 def _to_nchw_rgb(values: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:

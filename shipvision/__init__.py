@@ -75,6 +75,10 @@ _REGISTRY_HOMES: dict[str, str] = {
     "TRACKERS": "shipvision.tracking",
     "CAMERA_MOTION": "shipvision.tracking",
     "MTMC": "shipvision.mtmc",
+    "MTMC_MATCHERS": "shipvision.mtmc",
+    "MTMC_CLUSTERERS": "shipvision.mtmc",
+    # The two spellings the MTMC registries had before the matchers moved into
+    # `mtmc/core/`. Same objects, listed so the old top-level access keeps resolving.
     "MATRIX_BUILDERS": "shipvision.mtmc",
     "CLUSTERERS": "shipvision.mtmc",
 }
@@ -112,6 +116,8 @@ __all__ = [
     "IMGPROC",
     "MATRIX_BUILDERS",
     "MTMC",
+    "MTMC_CLUSTERERS",
+    "MTMC_MATCHERS",
     "NATIVE",
     "PYTHON",
     "TENSORRT",

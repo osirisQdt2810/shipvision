@@ -2,8 +2,13 @@
 # `shipvision._C` through pybind11.
 #
 # One source tree, two vendors. Every device call goes through the `gpu*` aliases in
-# core/platform.hpp, so the ROCm build is the same code — a raw `cudaMalloc` anywhere else
+# core/platform.h, so the ROCm build is the same code — a raw `cudaMalloc` anywhere else
 # silently breaks it, which is why there is a guard test for exactly that.
+#
+# The tree under `csrc/shipvision/` mirrors the Python package directory for directory, and a
+# component's header sits next to its translation unit. `csrc/` itself is the include root, so
+# `#include "shipvision/imgproc/image_ops.h"` reads the same from a kernel, from the bindings
+# and from a consumer — while `image_ops.h` and `image_ops.cu` stay one line apart in `ls`.
 #
 # Deliberately narrow. Anything a well-optimised library already does — allocation, streams,
 # graph capture, a plain resize, gemm — is not reimplemented here. What lives here is what
@@ -64,14 +69,24 @@ find_package(pybind11 CONFIG REQUIRED)
 # instead of silently not building. The usual objection to globbing — that a new file is
 # missed until someone reconfigures — is exactly what CONFIGURE_DEPENDS removes, and a
 # hand-maintained list across five algorithm domains would be forgotten within a month.
-file(GLOB SHIPVISION_CUDA_SOURCES CONFIGURE_DEPENDS
-     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/src/*.cu)
-file(GLOB SHIPVISION_CXX_SOURCES CONFIGURE_DEPENDS
-     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/src/*.cpp
+#
+# GLOB_RECURSE rather than GLOB: sources now live one directory per family under
+# `csrc/shipvision/`, so a flat glob would compile nothing and the FATAL_ERROR below is the
+# only thing that would say so.
+file(GLOB_RECURSE SHIPVISION_CUDA_SOURCES CONFIGURE_DEPENDS
+     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/shipvision/*.cu)
+file(GLOB_RECURSE SHIPVISION_CXX_SOURCES CONFIGURE_DEPENDS
+     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/shipvision/*.cpp)
+
+# The bindings are the one thing that is not a mirror of the Python package: they are the
+# Python edge itself, so they sit beside the library rather than inside it.
+file(GLOB SHIPVISION_BINDING_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_CURRENT_SOURCE_DIR}/csrc/bindings/*.cpp)
+list(APPEND SHIPVISION_CXX_SOURCES ${SHIPVISION_BINDING_SOURCES})
 
 if(NOT SHIPVISION_CUDA_SOURCES)
-  message(FATAL_ERROR "No kernels found under csrc/src/ — is the source tree complete?")
+  message(FATAL_ERROR
+    "No kernels found under csrc/shipvision/ — is the source tree complete?")
 endif()
 
 set(SHIPVISION_SOURCES ${SHIPVISION_CXX_SOURCES})
@@ -80,7 +95,7 @@ if(SHIPVISION_WITH_HIP)
   enable_language(HIP)
   add_compile_definitions(SHIPVISION_WITH_HIP)
   # The .cu files ARE the HIP sources — one tree, compiled by whichever vendor is present.
-  # This is what the gpu* aliases in core/platform.hpp exist to make possible.
+  # This is what the gpu* aliases in core/platform.h exist to make possible.
   set_source_files_properties(${SHIPVISION_CUDA_SOURCES} PROPERTIES LANGUAGE HIP)
   list(APPEND SHIPVISION_SOURCES ${SHIPVISION_CUDA_SOURCES})
   message(STATUS "shipvision native: HIP/ROCm backend")
@@ -106,7 +121,9 @@ endif()
 # ---------------------------------------------------------------------------------------
 pybind11_add_module(_C MODULE ${SHIPVISION_SOURCES})
 
-target_include_directories(_C PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/csrc/include)
+# `csrc/` is the include root, which is what keeps every `#include "shipvision/..."` path
+# unchanged now that the headers live next to their translation units.
+target_include_directories(_C PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/csrc)
 target_compile_options(_C PRIVATE
   $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wno-unused-parameter>
   $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)

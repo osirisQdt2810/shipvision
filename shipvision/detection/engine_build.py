@@ -217,7 +217,10 @@ def build_engine(
     trt.init_libnvinfer_plugins(logger, "")
     builder = trt.Builder(logger)
 
-    network = _parse(trt, builder, logger, onnx)
+    # `_parser` is bound, not discarded: the network holds memory the parser owns, so letting
+    # it be collected here is a use-after-free that surfaces as a crash later in the build.
+    # Named with a leading underscore because it is never read — its lifetime is the point.
+    network, _parser = _parse(trt, builder, logger, onnx)
     config = builder.create_builder_config()
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, int(workspace_bytes))
 
@@ -262,13 +265,67 @@ def _require_tensorrt() -> Any:
     return trt
 
 
-def _parse(trt: Any, builder: Any, logger: Any, onnx: Path) -> Any:
-    """A parsed network, or every parser error in one exception.
+def _validate_is_onnx(onnx: Path) -> None:
+    """Refuse anything that is not a serialised ONNX ModelProto, before TensorRT sees it.
+
+    **TensorRT's ONNX parser segmentation-faults on malformed input.** Measured on 10.14.1:
+    both ``parser.parse(bytes)`` and ``parser.parse_from_file(path)`` dump core on a text file
+    named ``*.onnx``. There is no return value to check and no exception to catch — the process
+    is gone.
+
+    That matters far more than a bad error message. The server builds engines from ONNX on
+    demand, so a truncated download or a Git-LFS pointer left unresolved in a model repository
+    would take the whole worker down at start-up, and the operator would see a core dump
+    instead of "this file is not ONNX".
+
+    So the file is checked here and TensorRT is only ever handed something valid. `onnx` is
+    used when importable because its parser reports *why*; the fallback is the ModelProto
+    header, which catches every case that is not a protobuf at all — the realistic failures.
+    """
+    # A backstop: `build_engine` checks existence first, so this fires only for a direct
+    # caller. Kept because this function is what stands between TensorRT and a core dump, and
+    # a validator that assumes its caller already checked is one refactor from being wrong.
+    if not onnx.is_file():
+        raise ModelLoadError(f"ONNX not found: {onnx}")
+    if onnx.stat().st_size == 0:
+        raise ModelLoadError(f"ONNX is empty: {onnx}")
+
+    try:
+        import onnx as onnx_module
+    except ImportError:
+        # Field 1 of ModelProto is `ir_version`, a varint, so a valid file begins with 0x08.
+        # Crude, and it is the difference between a typed error and a core dump.
+        head = onnx.read_bytes()[:1]
+        if head != b"\x08":
+            raise ModelLoadError(
+                f"{onnx} does not begin like a serialised ONNX ModelProto (first byte "
+                f"{head!r}, expected b'\\x08'). Install `onnx` for a precise diagnosis; "
+                f"TensorRT's parser crashes rather than reporting on malformed input, so "
+                f"this file is refused here."
+            ) from None
+        return
+
+    try:
+        onnx_module.load(str(onnx))
+    except Exception as exc:
+        raise ModelLoadError(
+            f"{onnx} is not a readable ONNX model: {type(exc).__name__}: {exc}. Refused "
+            f"before parsing because TensorRT's ONNX parser crashes on malformed input "
+            f"rather than reporting it."
+        ) from exc
+
+
+def _parse(trt: Any, builder: Any, logger: Any, onnx: Path) -> tuple[Any, Any]:
+    """A parsed network **and the parser that owns it**, or every parser error in one exception.
 
     The reference logs the errors and carries on to build from a half-populated network
     (``pytools/onnx2trt.py:96-99``), which produces either a mysterious build failure or an
     engine missing layers. Collecting them into the exception is the difference between "the
     build failed" and "opset 19 LayerNormalization is unsupported by this TensorRT".
+
+    The parser is returned rather than dropped because the network holds memory the parser
+    owns; letting it be collected while the network is still in use is a use-after-free that
+    presents as a crash somewhere later in the build.
     """
     flags = 0
     explicit_batch = getattr(trt.NetworkDefinitionCreationFlag, "EXPLICIT_BATCH", None)
@@ -277,6 +334,7 @@ def _parse(trt: Any, builder: Any, logger: Any, onnx: Path) -> Any:
         # batch. Reading the flag off the enum rather than assuming a version is what makes one
         # call site work on both.
         flags = 1 << int(explicit_batch)
+    _validate_is_onnx(onnx)
     network = builder.create_network(flags)
     parser = trt.OnnxParser(network, logger)
     if not parser.parse(onnx.read_bytes()):
@@ -284,7 +342,7 @@ def _parse(trt: Any, builder: Any, logger: Any, onnx: Path) -> Any:
         raise ModelLoadError(
             f"{onnx} did not parse as ONNX for this TensorRT: " + "; ".join(errors)
         )
-    return network
+    return network, parser
 
 
 def _apply_precision(

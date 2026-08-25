@@ -62,7 +62,7 @@ on a machine with no build.
 | `detection/` | YOLO26 detection and segmentation, TensorRT and torch backends, postprocessing |
 | `reid/` | embedding extractors, bounded galleries, feature aggregation, CMC/mAP, k-reciprocal re-ranking |
 | `tracking/` | SORT, ByteTrack, BoT-SORT, OC-SORT, DeepSORTv2 over one shared track pool |
-| `mtmc/` | appearance + ground-plane matrix builders, agglomerative clustering, camera topology, global-id assignment with TTL |
+| `mtmc/` | appearance + ground-plane + gated matchers, agglomerative clustering, camera topology, global-id assignment with TTL |
 | `tune/` | Optuna search spaces and objectives — a tracker's thresholds are an empirical question |
 | `eval/` | HOTA/MOTA/IDF1 for MOT and MTMC, CMC/mAP for re-ID |
 
@@ -79,7 +79,7 @@ decorator, never an edit to a switch statement. See `shipvision/registry.py`.
 stored normalised; unassigned ids are `None`, never `-1`.
 
 **One C++ source tree for two vendors.** Every device call goes through the `gpu*` aliases
-in `csrc/include/shipvision/core/platform.hpp`, so the ROCm build is the same code. A raw
+in `csrc/shipvision/core/platform.h`, so the ROCm build is the same code. A raw
 `cudaMalloc` anywhere else breaks it silently, which is why a test guards for exactly that.
 
 ## Tests

@@ -14,12 +14,15 @@ that codebase: a detection is trustworthy when it is **confident** and when it i
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 from shipvision.errors import ConfigurationError
+from shipvision.tracking.association.costs import appearance_cost
 from shipvision.types import iou_matrix
 
-__all__ = ["dynamic_appearance_momentum", "isolation"]
+__all__ = ["dynamic_appearance_momentum", "isolation", "pairwise_appearance"]
 
 
 def isolation(boxes: np.ndarray) -> np.ndarray:
@@ -107,3 +110,37 @@ def _ramp(values: np.ndarray, bounds: tuple[float, float]) -> np.ndarray:
     """
     lower, upper = bounds
     return (np.clip(values, lower, upper) - lower) / (upper - lower)
+
+
+def pairwise_appearance(
+    track_embeddings: np.ndarray | None,
+    rows: Sequence[int],
+    detection_embeddings: Sequence[np.ndarray | None],
+) -> np.ndarray | None:
+    """``(len(rows), len(detection_embeddings))`` cosine distance, or ``None`` if either side
+    lacks an embedding.
+
+    ``None`` means "there is no appearance evidence on this frame", and it is a distinct
+    answer from any cost matrix. The tempting alternative — a zero — asserts that every pair
+    looks identical, which is the strongest claim available and made on no evidence at all;
+    the tracker that receives ``None`` falls back to geometry instead.
+
+    All-or-nothing on purpose. A partially-populated matrix would have to invent a value for
+    the missing pairs, and any value invented there is a claim about identity.
+
+    Shared by BoT-SORT and DeepSORTv2, which is why it lives here rather than in either
+    algorithm's ``utils.py``: they had the same six lines each, and the day one of them fixed
+    a bug in its copy the two trackers would have started disagreeing about what "no
+    appearance" means.
+
+    Args:
+        track_embeddings: ``(n, d)`` L2-normalised track vectors, or ``None`` when the pool
+            cannot supply one for every track.
+        rows: which track indices to score, as indices into ``track_embeddings``.
+        detection_embeddings: one vector per detection column, any of which may be ``None``.
+    """
+    if track_embeddings is None:
+        return None
+    if any(embedding is None for embedding in detection_embeddings):
+        return None
+    return appearance_cost(track_embeddings[list(rows)], np.stack(list(detection_embeddings)))

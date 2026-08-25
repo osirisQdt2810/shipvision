@@ -1,4 +1,4 @@
-"""The distance matrices — and the one rule that makes cross-camera tracking cross-camera."""
+"""The matchers: the distance matrices they build, and the rule that makes MTMC cross-camera."""
 
 from __future__ import annotations
 
@@ -7,16 +7,17 @@ import pytest
 
 from shipvision.errors import ConfigurationError, DimensionMismatchError, TrackingError
 from shipvision.mtmc import (
-    MATRIX_BUILDERS,
+    MTMC_MATCHERS,
     NEVER_MERGE,
-    AppearanceMatrixBuilder,
-    BaseMatrixBuilder,
-    GatedMatrixBuilder,
+    AppearanceMatcher,
+    BaseMatcher,
+    GatedMatcher,
     GroundPlane,
     Homography,
-    SpatialMatrixBuilder,
+    SpatialMatcher,
     foot_points,
 )
+from shipvision.mtmc.core.gated import veto
 from tests.mtmc.conftest import (
     FRAME_HEIGHT,
     identity_homography,
@@ -31,11 +32,11 @@ def flat_plane() -> GroundPlane:
     return GroundPlane({"cam-a": identity_homography(), "cam-b": identity_homography()})
 
 
-def build(name: str, **kwargs: object) -> BaseMatrixBuilder:
-    """A builder by name, given a ground plane only if it has somewhere to put one."""
+def build(name: str, **kwargs: object) -> BaseMatcher:
+    """A matcher by name, given a ground plane only if it has somewhere to put one."""
     if name != "appearance":
         kwargs.setdefault("ground_plane", flat_plane())
-    return MATRIX_BUILDERS.build(name, **kwargs)
+    return MTMC_MATCHERS.build(name, **kwargs)
 
 
 def observations(*specs: tuple[str, int, int]) -> tuple:
@@ -68,18 +69,18 @@ def placed(*specs: tuple[str, int, int, float]) -> tuple:
 
 
 class TestSameCameraExclusion:
-    """The single most important claim in the package, asserted for every builder.
+    """The single most important claim in the package, asserted for every matcher.
 
     Two tracks in one camera view are two different objects by definition — if they were the
     same object, the single-camera tracker had one job and failed at it. Merge them anyway and
     MTMC silently becomes a within-camera deduplicator: every count drops, every metric
-    improves, and the system is worse. A builder that forgets the mask produces entirely
-    plausible output, which is why this is checked per builder rather than once.
+    improves, and the system is worse. A matcher that forgets the mask produces entirely
+    plausible output, which is why this is checked per matcher rather than once.
     """
 
-    @pytest.mark.parametrize("name", MATRIX_BUILDERS.names())
+    @pytest.mark.parametrize("name", MTMC_MATCHERS.names())
     def test_two_tracks_in_one_camera_can_never_merge(self, name: str) -> None:
-        builder = build(name)
+        matcher = build(name)
         # One camera, identical embeddings, identical positions: nothing but the mask can
         # keep these two apart.
         same = view_of(0)
@@ -92,16 +93,16 @@ class TestSameCameraExclusion:
             }
         ).observations
 
-        distances = builder.build(pair)
+        distances = matcher.build(pair)
 
         assert distances[0, 1] == pytest.approx(NEVER_MERGE)
         assert distances[1, 0] == pytest.approx(NEVER_MERGE)
 
-    @pytest.mark.parametrize("name", MATRIX_BUILDERS.names())
+    @pytest.mark.parametrize("name", MTMC_MATCHERS.names())
     def test_the_identical_pair_across_two_cameras_does_merge(self, name: str) -> None:
-        """The other half. Without it the test above would pass on a builder that refuses
+        """The other half. Without it the test above would pass on a matcher that refuses
         every pair, which is the failure mode that looks like caution."""
-        builder = build(name)
+        matcher = build(name)
         same = view_of(0)
         pair = make_cluster(
             {
@@ -110,41 +111,41 @@ class TestSameCameraExclusion:
             }
         ).observations
 
-        assert builder.build(pair)[0, 1] < 0.01
+        assert matcher.build(pair)[0, 1] < 0.01
 
 
 class TestMatrixContract:
-    """What every clusterer is entitled to assume about every builder's output."""
+    """What every clusterer is entitled to assume about every matcher's output."""
 
-    @pytest.mark.parametrize("name", MATRIX_BUILDERS.names())
+    @pytest.mark.parametrize("name", MTMC_MATCHERS.names())
     def test_the_matrix_is_symmetric_zero_diagonal_and_finite(self, name: str) -> None:
         """scipy refuses a non-finite condensed matrix outright, and its symmetry check is
         exact."""
-        builder = build(name)
+        matcher = build(name)
         obs = observations(("cam-a", 1, 0), ("cam-b", 1, 0), ("cam-a", 2, 1), ("cam-b", 2, 1))
 
-        distances = builder.build(obs)
+        distances = matcher.build(obs)
 
         assert distances.shape == (4, 4)
         assert np.all(np.isfinite(distances))
         assert np.allclose(distances, distances.T)
         assert np.allclose(np.diag(distances), 0.0)
 
-    @pytest.mark.parametrize("name", MATRIX_BUILDERS.names())
+    @pytest.mark.parametrize("name", MTMC_MATCHERS.names())
     def test_an_empty_instant_gives_a_zero_by_zero_matrix(self, name: str) -> None:
         """(0, 0), not (0,). An instant with no tracks is ordinary input, and the wrong shape
         turns it into an IndexError three frames later."""
         assert build(name).build(()).shape == (0, 0)
 
 
-class TestAppearanceMatrix:
+class TestAppearanceMatcher:
     """Cosine similarity, hard-thresholded, on embeddings that behave like real ones."""
 
     def test_two_views_of_one_object_are_close_and_two_objects_never_merge(self) -> None:
-        builder = AppearanceMatrixBuilder(appearance_threshold=0.5)
+        matcher = AppearanceMatcher(appearance_threshold=0.5)
         obs = observations(("cam-a", 1, 0), ("cam-b", 1, 0), ("cam-b", 2, 1))
 
-        distances = builder.build(obs)
+        distances = matcher.build(obs)
 
         assert distances[0, 1] < 0.1
         assert distances[0, 2] == pytest.approx(NEVER_MERGE)
@@ -170,20 +171,20 @@ class TestAppearanceMatrix:
             }
         ).observations
 
-        assert AppearanceMatrixBuilder(appearance_threshold=0.9).build(pair)[
-            0, 1
-        ] == pytest.approx(NEVER_MERGE)
+        assert AppearanceMatcher(appearance_threshold=0.9).build(pair)[0, 1] == pytest.approx(
+            NEVER_MERGE
+        )
         # And the other half: just under the cosine, it is an ordinary short distance.
-        assert AppearanceMatrixBuilder(appearance_threshold=0.7).build(pair)[
-            0, 1
-        ] == pytest.approx(0.2, abs=1e-5)
+        assert AppearanceMatcher(appearance_threshold=0.7).build(pair)[0, 1] == pytest.approx(
+            0.2, abs=1e-5
+        )
 
     def test_an_un_normalised_embedding_gives_the_same_answer_as_a_normalised_one(self) -> None:
-        """The contract says embeddings arrive normalised; the builder does not bet the site
+        """The contract says embeddings arrive normalised; the matcher does not bet the site
         on every upstream stage having honoured it. An un-normalised vector turns cosine
         similarity into a dot product of arbitrary scale — which does not fail, it just makes
         every threshold in the package mean something different."""
-        builder = AppearanceMatrixBuilder(appearance_threshold=0.5)
+        matcher = AppearanceMatcher(appearance_threshold=0.5)
         unit = view_of(0)
         pair = make_cluster(
             {
@@ -194,29 +195,29 @@ class TestAppearanceMatrix:
             }
         ).observations
 
-        assert builder.build(pair)[0, 1] == pytest.approx(0.0, abs=1e-5)
+        assert matcher.build(pair)[0, 1] == pytest.approx(0.0, abs=1e-5)
 
     def test_a_track_without_an_embedding_raises_and_names_the_missing_stage(self) -> None:
-        builder = AppearanceMatrixBuilder()
+        matcher = AppearanceMatcher()
         obs = observations(("cam-a", 1, 0), ("cam-b", 1, 0))
         obs[1].track.embedding = None
 
         with pytest.raises(TrackingError, match="needs an embedding on every track"):
-            builder.build(obs)
+            matcher.build(obs)
 
     def test_embeddings_of_two_widths_in_one_group_are_a_typed_failure(self) -> None:
         """Two cameras running different re-ID models. The only other symptom is a similarity
         matrix that cannot be formed — or worse, one a broadcast quietly produced."""
-        builder = AppearanceMatrixBuilder()
+        matcher = AppearanceMatcher()
         obs = observations(("cam-a", 1, 0), ("cam-b", 1, 0))
         obs[1].track.embedding = np.ones(7, dtype=np.float32)
 
         with pytest.raises(DimensionMismatchError, match="not running the same re-ID model"):
-            builder.build(obs)
+            matcher.build(obs)
 
     def test_the_threshold_is_validated_at_construction(self) -> None:
         with pytest.raises(ConfigurationError, match=r"\[-1, 1\]"):
-            AppearanceMatrixBuilder(appearance_threshold=1.5)
+            AppearanceMatcher(appearance_threshold=1.5)
 
 
 class TestFootPoint:
@@ -245,39 +246,35 @@ class TestFootPoint:
             foot_points(np.zeros((2, 4)), np.array([FRAME_HEIGHT]))
 
 
-class TestSpatialMatrix:
+class TestSpatialMatcher:
     """Ground-plane geometry on its own."""
 
     def test_distance_is_measured_on_the_plane_not_in_the_image(self) -> None:
-        builder = SpatialMatrixBuilder(ground_plane=flat_plane())
+        matcher = SpatialMatcher(ground_plane=flat_plane())
         obs = placed(("cam-a", 1, 0, 100.0), ("cam-b", 1, 0, 300.0))
 
-        assert builder.ground_distances(obs)[0, 1] == pytest.approx(200.0, rel=1e-4)
+        assert matcher.ground_distances(obs)[0, 1] == pytest.approx(200.0, rel=1e-4)
 
     def test_an_uncalibrated_camera_yields_unknowable_rather_than_the_origin(self) -> None:
         """The reference put uncalibrated tracks at (0, 0) and kept a side-list of indices.
         The origin is a real place on the map: one forgotten check and every uncalibrated
         camera's tracks are coincident with each other."""
-        builder = SpatialMatrixBuilder(
-            ground_plane=GroundPlane({"cam-a": identity_homography()})
-        )
+        matcher = SpatialMatcher(ground_plane=GroundPlane({"cam-a": identity_homography()}))
         obs = placed(("cam-a", 1, 0, 100.0), ("cam-b", 1, 0, 100.0))
 
-        points, known = builder.ground_positions(obs)
+        points, known = matcher.ground_positions(obs)
 
         assert known.tolist() == [True, False]
         assert np.isnan(points[1]).all()
-        assert not np.isfinite(builder.ground_distances(obs)[0, 1])
+        assert not np.isfinite(matcher.ground_distances(obs)[0, 1])
 
     def test_clustering_on_position_alone_refuses_to_merge_what_it_cannot_judge(self) -> None:
         """The opposite of what the gate does with the same input, and both are right: with no
         other evidence in play, "I cannot tell" must not become "merge them"."""
-        builder = SpatialMatrixBuilder(
-            ground_plane=GroundPlane({"cam-a": identity_homography()})
-        )
+        matcher = SpatialMatcher(ground_plane=GroundPlane({"cam-a": identity_homography()}))
         obs = placed(("cam-a", 1, 0, 100.0), ("cam-b", 1, 0, 100.0))
 
-        assert builder.build(obs)[0, 1] == pytest.approx(NEVER_MERGE)
+        assert matcher.build(obs)[0, 1] == pytest.approx(NEVER_MERGE)
 
     def test_a_resolution_change_is_rescaled_into_the_calibrated_domain(self) -> None:
         """A homography fitted on 1080p stills does not apply to the 720p night stream: the
@@ -286,7 +283,7 @@ class TestSpatialMatrix:
         plane = GroundPlane(
             {"cam-a": Homography(matrix=np.eye(3), camera_width=1920, camera_height=1080)}
         )
-        builder = SpatialMatrixBuilder(ground_plane=plane)
+        matcher = SpatialMatcher(ground_plane=plane)
         half = make_cluster(
             {
                 "cam-a": [
@@ -302,7 +299,7 @@ class TestSpatialMatrix:
             width=960,
         ).observations
 
-        points, known = builder.ground_positions(half)
+        points, known = matcher.ground_positions(half)
 
         assert known.tolist() == [True]
         # Foot point (480, 340) in a 960x540 frame is (960, 680) in the calibrated 1920x1080.
@@ -310,18 +307,18 @@ class TestSpatialMatrix:
 
     def test_parameters_are_validated_at_construction(self) -> None:
         with pytest.raises(ConfigurationError, match="spatial_threshold must be positive"):
-            SpatialMatrixBuilder(spatial_threshold=0.0)
+            SpatialMatcher(spatial_threshold=0.0)
         with pytest.raises(ConfigurationError, match="aspect_ratio"):
-            SpatialMatrixBuilder(aspect_ratio=0.0)
+            SpatialMatcher(aspect_ratio=0.0)
 
 
 class TestSpatialGating:
-    """Appearance vetoed by geometry: the production builder, and its fallbacks."""
+    """Appearance vetoed by geometry: the production matcher, and its fallbacks."""
 
     def test_two_identical_looking_people_far_apart_do_not_merge(self) -> None:
         """The whole point of the gate. Two crew in identical overalls score high on
         appearance from any model; they are 200 ground units apart, so they are two people."""
-        builder = GatedMatrixBuilder(
+        matcher = GatedMatcher(
             ground_plane=flat_plane(), appearance_threshold=0.5, spatial_threshold=100.0
         )
         same = view_of(0)
@@ -348,12 +345,12 @@ class TestSpatialGating:
             }
         ).observations
 
-        assert builder.build(far)[0, 1] == pytest.approx(NEVER_MERGE)
+        assert matcher.build(far)[0, 1] == pytest.approx(NEVER_MERGE)
 
     def test_the_same_pair_standing_two_units_apart_does_merge(self) -> None:
         """The other half of the assertion above. Without it the test would pass on a gate
         that rejects everything."""
-        builder = GatedMatrixBuilder(
+        matcher = GatedMatcher(
             ground_plane=flat_plane(), appearance_threshold=0.5, spatial_threshold=100.0
         )
         same = view_of(0)
@@ -380,7 +377,7 @@ class TestSpatialGating:
             }
         ).observations
 
-        assert builder.build(near)[0, 1] < 0.01
+        assert matcher.build(near)[0, 1] < 0.01
 
     def test_an_uncalibrated_camera_degrades_to_appearance_instead_of_excluding_itself(
         self,
@@ -388,20 +385,63 @@ class TestSpatialGating:
         """A new camera goes live before anyone clicks its calibration points, and a PTZ
         camera invalidates its own the moment it moves. Excluding it is the quiet failure: its
         identities simply never merge with anyone and nothing in the metrics says so."""
-        builder = GatedMatrixBuilder(
+        matcher = GatedMatcher(
             ground_plane=GroundPlane({"cam-a": identity_homography()}),
             appearance_threshold=0.5,
             spatial_threshold=1.0,  # so tight that any judged pair would be rejected
         )
         obs = placed(("cam-a", 1, 0, 100.0), ("cam-b", 1, 0, 900.0))
 
-        assert builder.build(obs)[0, 1] < 0.1
+        assert matcher.build(obs)[0, 1] < 0.1
 
-    def test_a_gate_with_no_homographies_is_exactly_the_appearance_builder(self) -> None:
+    def test_a_gate_with_no_homographies_is_exactly_the_appearance_matcher(self) -> None:
         """Which is what makes "gated" a safe default: an uncalibrated site gets
         appearance-only behaviour without a config change."""
-        gated = GatedMatrixBuilder(appearance_threshold=0.5)
-        plain = AppearanceMatrixBuilder(appearance_threshold=0.5)
+        gated = GatedMatcher(appearance_threshold=0.5)
+        plain = AppearanceMatcher(appearance_threshold=0.5)
         obs = observations(("cam-a", 1, 0), ("cam-b", 1, 0), ("cam-b", 2, 1))
 
         assert np.allclose(gated.build(obs), plain.build(obs))
+
+
+class TestVeto:
+    """The gate is a veto, not a penalty, and that distinction is what makes it hold."""
+
+    def test_a_refused_pair_becomes_exactly_zero(self) -> None:
+        """Exactly zero, because that is the only value `to_distance` turns into NEVER_MERGE.
+        A scaled-down similarity is merely expensive, and average linkage will buy it as soon
+        as somebody loosens the cut."""
+        similarity = np.array([[1.0, 0.9], [0.9, 1.0]], dtype=np.float32)
+        allowed = np.array([[True, False], [False, True]])
+
+        vetoed = veto(similarity, allowed)
+
+        assert vetoed[0, 1] == 0.0
+        assert vetoed[1, 0] == 0.0
+
+    def test_a_vetoed_pair_survives_the_conversion_as_never_merge(self) -> None:
+        """The chain the gate depends on, asserted end to end rather than at one link."""
+        similarity = veto(
+            np.array([[1.0, 0.9], [0.9, 1.0]], dtype=np.float32),
+            np.array([[True, False], [False, True]]),
+        )
+        mergeable = np.array([[False, True], [True, False]])
+
+        assert BaseMatcher.to_distance(similarity, mergeable)[0, 1] == pytest.approx(
+            NEVER_MERGE
+        )
+
+    def test_an_allowed_pair_is_left_alone(self) -> None:
+        """Without this, a veto that refused everything would pass the test above."""
+        similarity = np.array([[1.0, 0.9], [0.9, 1.0]], dtype=np.float32)
+
+        vetoed = veto(similarity, np.ones((2, 2), dtype=bool))
+
+        assert np.allclose(vetoed, similarity)
+        assert vetoed.dtype == np.float32
+
+    def test_a_gate_of_the_wrong_shape_is_a_typed_failure(self) -> None:
+        """numpy would broadcast a (1, n) gate against an (n, n) similarity without
+        complaint, and the result is wrong for every row but one."""
+        with pytest.raises(DimensionMismatchError, match="the gate is"):
+            veto(np.ones((3, 3), dtype=np.float32), np.ones((1, 3), dtype=bool))

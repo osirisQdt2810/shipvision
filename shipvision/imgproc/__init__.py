@@ -32,6 +32,8 @@ Layout::
     imgproc/
     ├── geometry.py     LetterboxGeometry and the sampling conventions — what a *consumer*
     │                   needs, so it sits above the backends rather than inside one
+    ├── colour.py       NV12 and the colour conventions: nearest chroma, BT.601 limited
+    │                   range, convert-then-interpolate, stride carried as data
     ├── base.py         the ImageOps contract, input validation, colour and normalisation
     ├── registry.py     IMGPROC
     ├── nms/            five suppression methods and the rules they share
@@ -67,6 +69,7 @@ from shipvision.imgproc.base import (
     ImageOps,
     nchw_nbytes,
 )
+from shipvision.imgproc.colour import bgr_to_nv12, nv12_height, nv12_rows, nv12_to_rgb
 from shipvision.imgproc.geometry import LetterboxGeometry
 from shipvision.imgproc.nms import METHODS, SOFT_METHODS, suppress
 from shipvision.imgproc.registry import IMGPROC
@@ -95,9 +98,13 @@ __all__ = [
     "NativeImageOps",
     "NumpyImageOps",
     "TorchImageOps",
+    "bgr_to_nv12",
     "build_image_ops",
     "native_available",
     "nchw_nbytes",
+    "nv12_height",
+    "nv12_rows",
+    "nv12_to_rgb",
     "suppress",
 ]
 

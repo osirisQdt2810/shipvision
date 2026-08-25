@@ -58,7 +58,7 @@ A generic reviewer will miss every one of them.
     A scratch buffer freed while its kernel is still running is a use-after-free with a
     delay fuse; if the answer is "we synchronise", ask whether that synchronise just made
     the async path serial.
-11. **Vendor portability.** Raw `cuda*`/`hip*` outside `core/platform.hpp` breaks the other
+11. **Vendor portability.** Raw `cuda*`/`hip*` outside `core/platform.h` breaks the other
     vendor's build silently. So does a `__syncthreads` assumption about warp size.
 12. **Per-frame Python overhead.** This runs 1000 times a second. A per-track Python loop
     calling numpy on 8-element arrays, an O(n) generator over a metadata list inside a

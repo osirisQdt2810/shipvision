@@ -47,6 +47,14 @@ Homepage = "https://github.com/osirisQdt2810/shipvision"
 
 # The package sits at the repository root; csrc/ is the C++/CUDA source tree and is not a
 # Python package.
+#
+# `csrc/shipvision/` mirrors the package name on purpose — it is the include root's view of
+# the same component tree — and it is deliberately NOT shipped in the wheel. Two independent
+# things keep it out: `csrc/` has no `__init__.py`, so package discovery never descends into
+# it, and even if it gained one the discovered name would be `csrc.shipvision`, which
+# `include` does not match. A test asserts the outcome rather than the reasoning, because
+# shipping a directory of .cu files as `shipvision` would shadow the real package on
+# sys.path and produce an ImportError nobody could explain from the traceback.
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["shipvision*"]

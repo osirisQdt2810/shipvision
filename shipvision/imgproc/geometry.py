@@ -16,7 +16,7 @@ CONVENTION 1 — SAMPLING CENTRES ARE HALF-PIXEL, ``align_corners=False``
         src = (i + 0.5) * source_extent / resized_extent - 0.5
 
     This is what OpenCV's ``INTER_LINEAR``, ``torch.nn.functional.interpolate(...,
-    align_corners=False)`` and the CUDA kernel in ``csrc/src/imgproc_image_ops.cu`` all do.
+    align_corners=False)`` and the CUDA kernel in ``csrc/shipvision/imgproc/image_ops.cu`` all do.
     Note the ratio is ``source_extent / resized_extent`` — the *achieved* ratio, after the
     resized extent was rounded to whole pixels — and **not** ``1 / scale``. Those differ by up
     to half a pixel over the whole image, and the kernel uses the achieved ratio, so numpy and

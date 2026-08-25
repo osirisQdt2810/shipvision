@@ -35,7 +35,7 @@ VALUE_TOLERANCE = 1e-3
 # 1079x1919 is there for a different reason: its byte count, 6 211 803, is odd, so a frame of
 # that shape leaves every offset after it in the staging ring unaligned. Every other shape here
 # is a multiple of 16 bytes, which is why the alignment claim below needs it — see
-# `align_up` in csrc/include/shipvision/core/platform.hpp, and the misaligned-address error
+# `align_up` in csrc/shipvision/core/platform.h, and the misaligned-address error
 # that comment describes, which is sticky.
 SHAPES = [(1080, 1920), (1077, 1920), (1079, 1919), (720, 1280), (37, 53), (4, 4)]
 

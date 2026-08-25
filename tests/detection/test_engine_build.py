@@ -206,13 +206,40 @@ class TestBuildEngineOnRealHardware:
                 ],
             )
 
-    def test_a_file_that_is_not_onnx_reports_the_parser_errors(self, tmp_path) -> None:
+    def test_a_file_that_is_not_onnx_is_refused_before_tensorrt_sees_it(self, tmp_path) -> None:
+        """The file must be rejected by *us*, not by the parser.
+
+        This test used to expect the parser's own error message. It could never have passed,
+        because it was written on a machine with no TensorRT: with TensorRT present,
+        `parser.parse()` and `parser.parse_from_file()` both **segmentation-fault** on a text
+        file named `*.onnx` — measured on 10.14.1, no return value and no exception, the
+        process is simply gone.
+
+        That is why validation happens before the parser is handed anything, and why this test
+        now asserts the shape of *our* refusal. It matters beyond error quality: the server
+        builds engines from ONNX on demand, so a truncated download or an unresolved Git-LFS
+        pointer in a model repository would otherwise take the worker down at start-up and
+        leave an operator staring at a core dump.
+        """
         pytest.importorskip("tensorrt")
         junk = tmp_path / "junk.onnx"
         junk.write_bytes(b"definitely not onnx")
 
-        with pytest.raises(ModelLoadError, match="did not parse"):
+        with pytest.raises(ModelLoadError, match=r"not a readable ONNX model|ModelProto"):
             build_engine(junk, tmp_path / "junk.engine")
+
+        assert not (tmp_path / "junk.engine").exists(), "a refused build must leave nothing"
+
+    def test_an_empty_and_a_missing_onnx_are_both_refused(self, tmp_path) -> None:
+        """Two cases a size check catches that a parser never gets to see."""
+        empty = tmp_path / "empty.onnx"
+        empty.write_bytes(b"")
+
+        with pytest.raises(ModelLoadError, match="empty"):
+            build_engine(empty, tmp_path / "e.engine")
+        # `build_engine` checks existence before it gets this far, hence its own wording.
+        with pytest.raises(ModelLoadError, match="no ONNX at"):
+            build_engine(tmp_path / "absent.onnx", tmp_path / "a.engine")
 
     def test_a_timing_cache_is_written_and_reused(self, onnx, tmp_path) -> None:
         cache = tmp_path / "timing.cache"

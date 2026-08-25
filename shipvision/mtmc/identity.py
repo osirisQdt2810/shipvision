@@ -329,7 +329,7 @@ class GlobalIdAssigner:
                 # one frame's evidence is how identities oscillate, so nothing happens.
                 return
             # One identity per camera, even here. Two same-camera keys can only reach one
-            # cluster if the matrix builder's exclusion mask was bypassed, and the reference
+            # cluster if the matcher's exclusion mask was bypassed, and the reference
             # trusted that it never would be — so its brand-new identities could contain two
             # tracks from one camera, which nothing downstream expects and its own
             # per-camera lookup then resolves arbitrarily. Enforcing it locally means this

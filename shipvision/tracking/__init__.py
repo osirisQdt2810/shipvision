@@ -39,7 +39,10 @@ that a claim about any of them can be tested against the one below it:
 Layout, and the one reason each directory exists:
 
 ``base.py``
-    The contract, the process-wide id counter, and the ``TRACKERS`` registry.
+    The contract and the process-wide id counter.
+``registry.py``
+    ``TRACKERS``. A leaf module, so that ``core/<algorithm>/tracker.py`` can take the decorator
+    without dragging the whole contract in behind it.
 ``pool.py``
     :class:`~shipvision.tracking.pool.TrackPool` — the lifecycle every tracker shares. A
     tracker that re-derives it is a tracker that will disagree with the other four about when
@@ -47,10 +50,19 @@ Layout, and the one reason each directory exists:
 ``motion/``
     How a track moves (the Kalman filter) and how the camera moves under it (``cmc/``).
 ``association/``
-    Which detection is which track: the costs, the solver, and the appearance policy. The
-    only part that differs between algorithms, which is why the five tracker files are short.
+    Which detection is which track: the costs, the solver, and the appearance policy. Anything
+    two algorithms both use lives here, which is why the five ``tracker.py`` files are short.
+``core/``
+    One **package** per algorithm: the tracker class, what it asks of the shared track state,
+    and the helpers it alone uses. Adding an algorithm is a new package plus a decorator.
 ``trackers/``
-    One algorithm per file.
+    A compatibility shim for the flat ``trackers/<name>.py`` layout this replaced. Nothing new
+    goes there.
+
+Everything above is re-exported from this module, and that flat surface is a compatibility
+shim too: ``from shipvision.tracking import TRACKERS, SortTracker`` predates ``core/`` and
+must keep working. The registries are the supported way in — ``TRACKERS.build("sort")`` — and
+importing a tracker class by name is only for the callers that already do.
 """
 
 from shipvision.tracking.association import (
@@ -63,13 +75,22 @@ from shipvision.tracking.association import (
     dynamic_appearance_momentum,
     fuse_score,
     gate_cost,
+    gated_iou_cost,
     giou_cost,
     giou_matrix,
     iou_cost,
     isolation,
     min_fuse,
+    pairwise_appearance,
 )
-from shipvision.tracking.base import TRACKERS, BaseTracker, next_track_id
+from shipvision.tracking.base import BaseTracker, next_track_id
+from shipvision.tracking.core import (
+    BotSortTracker,
+    ByteTrackTracker,
+    DeepSortV2Tracker,
+    OcSortTracker,
+    SortTracker,
+)
 from shipvision.tracking.motion import (
     CAMERA_MOTION,
     CHI2_INV_95_4DOF,
@@ -81,13 +102,7 @@ from shipvision.tracking.motion import (
     SparseOpticalFlowCameraMotion,
 )
 from shipvision.tracking.pool import TrackPool
-from shipvision.tracking.trackers import (
-    BotSortTracker,
-    ByteTrackTracker,
-    DeepSortV2Tracker,
-    OcSortTracker,
-    SortTracker,
-)
+from shipvision.tracking.registry import TRACKERS
 
 __all__ = [
     "CAMERA_MOTION",
@@ -115,10 +130,12 @@ __all__ = [
     "dynamic_appearance_momentum",
     "fuse_score",
     "gate_cost",
+    "gated_iou_cost",
     "giou_cost",
     "giou_matrix",
     "iou_cost",
     "isolation",
     "min_fuse",
     "next_track_id",
+    "pairwise_appearance",
 ]

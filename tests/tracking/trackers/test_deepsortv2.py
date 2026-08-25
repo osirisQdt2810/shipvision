@@ -2,7 +2,7 @@
 
 The port is from the internal C++ tracker, so these tests are also the record of what the
 port decided where that source contradicted itself — see the module docstring of
-:mod:`shipvision.tracking.trackers.deepsortv2` for the four defects found and not carried
+:mod:`shipvision.tracking.core.deepsortv2.tracker` for the four defects found and not carried
 over.
 """
 

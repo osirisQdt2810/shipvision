@@ -22,6 +22,7 @@ __all__ = [
     "direction_cost",
     "fuse_score",
     "gate_cost",
+    "gated_iou_cost",
     "giou_cost",
     "giou_matrix",
     "iou_cost",
@@ -131,6 +132,42 @@ def gate_cost(
         feasible = gating_distances <= threshold
         gated[feasible] = (1 - weight) * gated[feasible] + weight * gating_distances[feasible]
     return gated
+
+
+def gated_iou_cost(
+    track_boxes: np.ndarray,
+    detection_boxes: np.ndarray,
+    *,
+    gating_distances: np.ndarray | None = None,
+    threshold: float,
+) -> np.ndarray:
+    """``1 - IoU``, with the motion model given a veto. Two algorithms share this exactly.
+
+    SORT's only association stage and ByteTrack's low-score second stage are the same three
+    lines. They lived as two copies until the algorithms became packages, and the copies are
+    what this function exists to prevent: the two are a plausible place to "fix" a gate, and
+    fixing one of them silently makes ByteTrack's second pass and the SORT baseline it is
+    measured against stop being comparable — with both trackers still passing every test.
+
+    ``gating_distances=None`` means *the gate is off*, which is a different state from a gate
+    that admitted everything, and is why the parameter is not a sentinel distance: a caller
+    that has switched gating off should not first have to pay for the distances.
+
+    ``threshold`` is required rather than defaulted to
+    :data:`~shipvision.tracking.motion.kalman.CHI2_INV_95_4DOF` so that ``association`` keeps
+    knowing nothing about ``motion``. The chi-square value belongs to the filter that produced
+    the distances, and a default here would quietly outlive a change to the state dimension.
+
+    Args:
+        track_boxes: ``(n, 4)`` xyxy predictions, one per track being matched.
+        detection_boxes: ``(m, 4)`` xyxy detections.
+        gating_distances: ``(n, m)`` squared Mahalanobis distances, or ``None`` to skip.
+        threshold: gating distance above which a pair is forbidden.
+    """
+    cost = iou_cost(track_boxes, detection_boxes)
+    if gating_distances is None:
+        return cost
+    return gate_cost(cost, gating_distances, threshold)
 
 
 def min_fuse(

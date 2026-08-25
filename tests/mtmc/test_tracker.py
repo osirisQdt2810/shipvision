@@ -8,7 +8,7 @@ import pytest
 from shipvision.errors import ConfigurationError
 from shipvision.mtmc import (
     MTMC,
-    AppearanceMatrixBuilder,
+    AppearanceMatcher,
     ClusterMTMCTracker,
     FrameTrackCluster,
     GroundPlane,
@@ -369,22 +369,22 @@ class TestConstruction:
         would make it unselectable from config."""
         instance = ClusterMTMCTracker(matrix_builder="appearance", appearance_threshold=0.5)
 
-        assert isinstance(instance.builder, AppearanceMatrixBuilder)
+        assert isinstance(instance.builder, AppearanceMatcher)
         assert instance.builder.appearance_threshold == 0.5
 
     def test_a_prebuilt_component_is_used_as_given(self) -> None:
-        builder = AppearanceMatrixBuilder(appearance_threshold=0.42)
+        builder = AppearanceMatcher(appearance_threshold=0.42)
 
         instance = ClusterMTMCTracker(matrix_builder=builder, appearance_threshold=0.99)
 
         assert instance.builder is builder
 
     def test_an_unknown_builder_name_fails_at_construction(self) -> None:
-        with pytest.raises(ConfigurationError, match="unknown mtmc matrix builder"):
+        with pytest.raises(ConfigurationError, match="unknown mtmc matcher"):
             ClusterMTMCTracker(matrix_builder="telepathy")
 
     def test_a_nonsense_builder_type_fails_at_construction(self) -> None:
-        with pytest.raises(ConfigurationError, match="registered name or a BaseMatrixBuilder"):
+        with pytest.raises(ConfigurationError, match="registered name or a BaseMatcher"):
             ClusterMTMCTracker(matrix_builder=np.eye(3))
 
     def test_an_out_of_range_threshold_fails_at_construction(self) -> None:

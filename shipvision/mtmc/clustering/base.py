@@ -10,6 +10,10 @@ cameras might be watching one person or eleven, and that is the answer being ask
 Anything with a ``k`` in its signature has to be handed a guess, and the reference threaded
 an unused ``n_clusters`` argument through four layers on the way to a function that ignored
 it — a parameter that looks like a control and is not.
+
+The family's registry, :data:`~shipvision.mtmc.registry.MTMC_CLUSTERERS`, lives in
+:mod:`shipvision.mtmc.registry` with the other two, so that an implementation can import both
+the ABC and the decorator without the two importing each other.
 """
 
 from __future__ import annotations
@@ -19,9 +23,9 @@ import abc
 import numpy as np
 
 from shipvision.errors import ConfigurationError, TrackingError
-from shipvision.registry import PYTHON, Registry
+from shipvision.registry import PYTHON
 
-__all__ = ["CLUSTERERS", "BaseClusterer"]
+__all__ = ["BaseClusterer"]
 
 
 class BaseClusterer(abc.ABC):
@@ -50,7 +54,7 @@ class BaseClusterer(abc.ABC):
         merge these" and it is wrong: ``scipy``'s condensed form rejects it outright, and any
         linkage that averages distances would compute ``inf - inf`` and get NaN, which does
         not fail — it produces a dendrogram whose merges are arbitrary. That is why
-        :data:`shipvision.mtmc.matrix.NEVER_MERGE` is a large finite number, and this is where
+        :data:`shipvision.mtmc.base.NEVER_MERGE` is a large finite number, and this is where
         a builder that ignored that finds out.
         """
         matrix = np.asarray(distances, dtype=np.float64)
@@ -71,7 +75,16 @@ class BaseClusterer(abc.ABC):
         return f"<{type(self).__name__} backend={self.backend}>"
 
 
-#: The clusterer family. One implementation today; the seam exists because the choice of
-#: linkage and cut is the single most consequential tuning decision in cross-camera tracking,
-#: and comparing two of them on one recorded stream must not require a code change.
-CLUSTERERS: Registry[BaseClusterer] = Registry("mtmc clusterer")
+# -- compatibility shim -------------------------------------------------------------------
+#
+# `CLUSTERERS` was defined here and listed in this module's `__all__` before the registry
+# moved to `mtmc/registry.py`. Re-exported under the old name and from the old module,
+# because a package-level re-export is not the same promise as a module attribute: after the
+# move `shipvision.mtmc.clustering.CLUSTERERS` still resolved while
+# `shipvision.mtmc.clustering.base.CLUSTERERS` did not, and both were public.
+#
+# It is the same object, not a copy — a second registry would silently hold a different set
+# of algorithms depending on which name registered into it.
+from shipvision.mtmc.registry import MTMC_CLUSTERERS as CLUSTERERS  # noqa: E402
+
+__all__ = [*__all__, "CLUSTERERS"]
