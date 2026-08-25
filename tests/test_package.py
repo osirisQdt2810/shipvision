@@ -159,3 +159,90 @@ class TestDocumentedEntryPoints:
         )
 
         assert len(gallery) == 1
+
+
+class TestTheLazyMachineryItself:
+    """The half `REGISTRIES` cannot reach, because the shipped table is empty.
+
+    `_REGISTRY_HOMES` starts empty on purpose — a family is added to it when it lands — so
+    every test above parametrized over `REGISTRIES` collects as an empty parameter set and
+    passes without running. That is fine as a *shape* check for whatever ships later, but it
+    means the machinery those tests exist to protect is currently exercised by nothing:
+    `globals()[name] = value`, the `ImportError` → `AttributeError` translation, and `__dir__`
+    could each be wrong today with the suite green.
+
+    So this class installs a real family — a real `Registry` in a real module — for the
+    duration of one test, and takes it out again. The memoised global has to be deleted in
+    teardown too: `__getattr__` caches into `globals()`, so a leftover entry would make a later
+    test pass for the wrong reason.
+    """
+
+    HOME = "tests.lazy_widget"
+
+    @pytest.fixture(autouse=True)
+    def _leave_no_trace(self):
+        """Undo the two global effects a resolution has, after *every* test in this class.
+
+        Autouse rather than attached to `declared`, because the leak came from the one test
+        here that names `HOME` without asking for that fixture — so its teardown never ran, and
+        `test_registry.py::test_a_lazy_entry_is_not_imported_until_it_is_built` failed from
+        this file. Test pollution reported as a bug in the code under test is the most
+        expensive kind of green-to-red there is.
+
+        Two things to undo: `__getattr__` memoises into `globals()`, and resolving the family
+        imports `tests/lazy_widget.py`, which is meant to be imported only by the test that
+        builds it.
+        """
+        yield
+        vars(shipvision).pop("WIDGETS", None)
+        sys.modules.pop("tests.lazy_widget", None)
+
+    @pytest.fixture
+    def declared(self, monkeypatch):
+        """`WIDGETS` declared in the table for the duration of one test."""
+        monkeypatch.setitem(shipvision._REGISTRY_HOMES, "WIDGETS", self.HOME)
+        return "WIDGETS"
+
+    def test_a_declared_family_resolves_on_first_access(self, declared: str) -> None:
+        from tests.lazy_widget import WIDGETS
+
+        assert getattr(shipvision, declared) is WIDGETS
+
+    def test_it_was_not_a_global_until_it_was_asked_for(self, declared: str) -> None:
+        """The point of the mechanism: declaring a family must not import it."""
+        assert declared not in vars(shipvision)
+
+        getattr(shipvision, declared)
+
+        assert declared in vars(shipvision), "resolution should memoise into module globals"
+
+    def test_the_second_access_is_the_memoised_global(self, declared: str) -> None:
+        first = getattr(shipvision, declared)
+        second = getattr(shipvision, declared)
+
+        assert first is second
+
+    def test_dir_lists_it_before_it_has_been_resolved(self, declared: str) -> None:
+        """Tab completion and `help()` read `__dir__`. A lazy attribute absent from it is
+        invisible to anyone exploring the package, which is when it matters most."""
+        assert declared not in vars(shipvision)
+
+        assert declared in dir(shipvision)
+
+    def test_a_home_that_cannot_be_imported_surfaces_as_attribute_error(
+        self, monkeypatch
+    ) -> None:
+        """Not ImportError. `hasattr` and `getattr(x, name, default)` both swallow only
+        AttributeError, so a family whose own dependencies are missing must arrive as an
+        absent attribute rather than as an exception from an unrelated package."""
+        monkeypatch.setitem(shipvision._REGISTRY_HOMES, "ABSENT", "shipvision.no_such_module")
+
+        with pytest.raises(AttributeError, match="could not be imported"):
+            _ = shipvision.ABSENT
+
+    def test_a_home_that_lacks_the_registry_is_not_silently_none(self, monkeypatch) -> None:
+        """The other half of the promise: the module imports, but does not define the name."""
+        monkeypatch.setitem(shipvision._REGISTRY_HOMES, "MISSING", self.HOME)
+
+        with pytest.raises(AttributeError):
+            _ = shipvision.MISSING

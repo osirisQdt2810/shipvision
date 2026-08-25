@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from shipvision import NATIVE, PYTHON, TORCH, ConfigurationError, Registry
@@ -160,16 +162,21 @@ class TestLazyRegistration:
     def test_a_lazy_entry_is_not_imported_until_it_is_built(self, registry: Registry) -> None:
         """Importing the TensorRT backend to discover TensorRT is absent costs a second and an
         exception on every start-up of every process that never uses it."""
+        # Established rather than assumed. The property is "register_lazy does not import", and
+        # inheriting an unimported state from whichever files ran first makes this test a
+        # report on collection order — it failed exactly that way once, from `test_package.py`.
+        sys.modules.pop("tests.lazy_widget", None)
+
         registry.register_lazy("late", "tests.lazy_widget:LazyWidget", backend=NATIVE)
 
         assert "late" in registry
         assert registry.backends("late") == [NATIVE]
-        assert "tests.lazy_widget" not in __import__("sys").modules
+        assert "tests.lazy_widget" not in sys.modules
 
         built = registry.build("late")
 
         assert type(built).__name__ == "LazyWidget"
-        assert "tests.lazy_widget" in __import__("sys").modules
+        assert "tests.lazy_widget" in sys.modules
 
     def test_a_lazy_class_reports_the_same_name_and_backend_as_an_eager_one(
         self,

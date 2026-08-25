@@ -200,14 +200,19 @@ class TestNonFiniteInput:
         with pytest.raises(ConfigurationError):
             Track(track_id=1, box=[0.0, 0.0, np.nan, 1.0], tag=TAG)
 
-    def test_finite_input_is_untouched(self) -> None:
-        """The guard must not cost the ordinary path anything or change a value."""
+    def test_a_finite_box_is_untouched(self) -> None:
+        """The guard must not cost the ordinary path anything or change a value.
+
+        The box only — this used to assert the same of the embedding, which is what pinned the
+        bug: the module's stated contract is that embeddings are stored L2-normalised, and
+        `[0, 1, 2, 3]` coming back unchanged is that contract being false. Direction is what
+        must survive normalisation, and `TestEmbedding` asserts it does.
+        """
         detection = Detection(
             box=[1.5, 2.5, 3.5, 4.5], embedding=np.arange(4, dtype=np.float32)
         )
 
         assert detection.box.tolist() == [1.5, 2.5, 3.5, 4.5]
-        assert detection.embedding.tolist() == [0.0, 1.0, 2.0, 3.0]
 
 
 class TestEmbedding:
@@ -360,3 +365,57 @@ class TestIouMatrix:
         assert m.shape == (5, 5)
         assert np.allclose(m, m.T)
         assert np.allclose(np.diag(m), 1.0)
+
+
+class TestEmbeddingsAreStoredNormalised:
+    """The contract in the module docstring, made true rather than merely written down.
+
+    A gallery that believes it computes cosine similarity as a plain dot product — which is the
+    entire stated reason for normalising here rather than inside every distance function — gets
+    silently wrong numbers against un-normalised rows: two identical `np.ones(512)` vectors
+    score 512, every `sim > 0.5` gate admits everything, and a quality-weighted aggregator ends
+    up weighted by whichever crop had the largest activations rather than by `quality`.
+
+    Asserted on all three carriers, because a rule that holds on one of them is worse than no
+    rule: it makes the exception the thing nobody checks for.
+    """
+
+    RAW = np.array([3.0, 4.0], dtype=np.float32)
+
+    def test_an_embedding_is_normalised_on_the_way_in(self) -> None:
+        assert np.linalg.norm(Embedding(vector=self.RAW).vector) == pytest.approx(1.0)
+
+    def test_a_detection_normalises_the_one_it_carries(self) -> None:
+        detection = Detection(box=[0.0, 0.0, 1.0, 1.0], embedding=self.RAW)
+
+        assert np.linalg.norm(detection.embedding) == pytest.approx(1.0)
+
+    def test_a_track_normalises_the_one_it_carries(self) -> None:
+        """The carrier that reaches furthest: a track is what MTMC clusters on, and it was
+        checked nowhere at all before."""
+        track = Track(track_id=1, tag=TAG, box=[0.0, 0.0, 1.0, 1.0], embedding=self.RAW)
+
+        assert np.linalg.norm(track.embedding) == pytest.approx(1.0)
+
+    def test_the_direction_survives(self) -> None:
+        """Normalising must not be a different vector, only a shorter one."""
+        stored = Embedding(vector=self.RAW).vector
+
+        assert stored.tolist() == pytest.approx([0.6, 0.8])
+
+    def test_an_already_normalised_vector_is_a_fixed_point(self) -> None:
+        """Otherwise normalising twice — once in an extractor, once here — would drift."""
+        once = Embedding(vector=self.RAW).vector
+        twice = Embedding(vector=once).vector
+
+        assert twice.tolist() == pytest.approx(once.tolist())
+
+    def test_an_all_zero_vector_is_refused_rather_than_turned_into_nan(self) -> None:
+        """It has no direction. Dividing gives NaN; leaving it gives a row at cosine 0 from
+        everything, which is a plausible answer to every query and so the worse failure."""
+        with pytest.raises(ConfigurationError, match="no direction"):
+            Embedding(vector=np.zeros(4, dtype=np.float32))
+
+    def test_a_zero_vector_on_a_detection_is_refused_too(self) -> None:
+        with pytest.raises(ConfigurationError, match="no direction"):
+            Detection(box=[0.0, 0.0, 1.0, 1.0], embedding=np.zeros(4, dtype=np.float32))
