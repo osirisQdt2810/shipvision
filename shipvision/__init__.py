@@ -67,6 +67,7 @@ __version__ = "0.1.0"
 #: keeping its own list, so declaring a family before it exists fails the suite instead of
 #: waiting to fail a user.
 _REGISTRY_HOMES: dict[str, str] = {
+    "DETECTORS": "shipvision.detection",
     "IMGPROC": "shipvision.imgproc",
     # Deliberately empty here. Every entry must resolve — `tests/test_package.py` reads this
     # table rather than keeping its own list — so a family declared before it exists fails the
@@ -99,6 +100,7 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "DETECTORS",
     "IMGPROC",
     "NATIVE",
     "PYTHON",
