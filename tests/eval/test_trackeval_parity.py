@@ -29,7 +29,7 @@ import pytest
 
 from shipvision.eval import load_case, run, score
 from shipvision.eval.datasets import read_seqinfo
-from shipvision.tracking import TRACKERS
+from shipvision.mot import TRACKERS
 
 pytestmark = pytest.mark.slow
 

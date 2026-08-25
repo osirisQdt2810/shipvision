@@ -13,7 +13,7 @@ import pytest
 from shipvision.errors import ConfigurationError, TrackingError
 from shipvision.eval.runner import evaluate, evaluate_all, run, score
 from shipvision.eval.sequence import EvaluationCase, TrackSequence
-from shipvision.tracking import TRACKERS
+from shipvision.mot import TRACKERS
 from shipvision.types import Detections, FrameTag, Track, TrackState
 
 from .conftest import box, detections, frame, sequence

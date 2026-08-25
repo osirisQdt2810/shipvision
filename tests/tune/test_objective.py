@@ -183,7 +183,7 @@ class TestOneTrackerPerCase:
     def test_a_shared_instance_would_have_raised(self, two_cases) -> None:
         """The guard, asserted directly, so the requirement above cannot quietly stop being one."""
         from shipvision.eval.runner import run
-        from shipvision.tracking import TRACKERS
+        from shipvision.mot import TRACKERS
 
         tracker = TRACKERS.build("sort", min_hits=1)
         run(tracker, two_cases[0])

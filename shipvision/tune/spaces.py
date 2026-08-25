@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from shipvision.errors import ConfigurationError
-from shipvision.tracking import TRACKERS
+from shipvision.mot import TRACKERS
 
 __all__ = [
     "APPEARANCE_PARAMETERS",
