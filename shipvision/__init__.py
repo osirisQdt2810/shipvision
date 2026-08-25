@@ -74,6 +74,11 @@ _REGISTRY_HOMES: dict[str, str] = {
     "AGGREGATORS": "shipvision.reid",
     "TRACKERS": "shipvision.tracking",
     "CAMERA_MOTION": "shipvision.tracking",
+    "MTMC": "shipvision.mtmc",
+    "MTMC_MATCHERS": "shipvision.mtmc",
+    "MTMC_CLUSTERERS": "shipvision.mtmc",
+    "MATRIX_BUILDERS": "shipvision.mtmc",
+    "CLUSTERERS": "shipvision.mtmc",
     # Deliberately empty here. Every entry must resolve — `tests/test_package.py` reads this
     # table rather than keeping its own list — so a family declared before it exists fails the
     # suite instead of waiting to fail a user. Each package therefore adds its own line when
@@ -107,10 +112,15 @@ def __dir__() -> list[str]:
 __all__ = [
     "AGGREGATORS",
     "CAMERA_MOTION",
+    "CLUSTERERS",
     "DETECTORS",
     "EXTRACTORS",
     "GALLERIES",
     "IMGPROC",
+    "MATRIX_BUILDERS",
+    "MTMC",
+    "MTMC_CLUSTERERS",
+    "MTMC_MATCHERS",
     "NATIVE",
     "PYTHON",
     "TENSORRT",
