@@ -4,6 +4,12 @@ __pycache__/
 *.egg-info/
 .eggs/
 build/
+# Any out-of-source build tree, not just the default name. `build-container/` is the one the
+# container's own toolchain writes — same sources, different ABI (the image is Python 3.11 and
+# the host 3.10), and CMake caches the interpreter it configured against, so it has to be a
+# second tree rather than a reuse. Ignoring only `build/` let 118k lines of CMake compiler-probe
+# output reach a `git add -A`.
+build-*/
 dist/
 .venv/
 venv/
