@@ -68,10 +68,13 @@ inner loops where a Python call per track is the frame budget. Nothing else.
   list — a dropped frame, a saturated queue and a dead GPU are three different events.
 - **Nothing grows without bound.** Galleries, track pools and MTMC global-id maps all take a
   capacity and state what they evict. A process here runs for weeks.
-- **C++: `gpu*` aliases from `core/platform.hpp` only.** A raw `cudaMalloc` breaks the ROCm
+- **C++: `gpu*` aliases from `core/platform.h` only.** A raw `cudaMalloc` breaks the ROCm
   build silently — `tests/test_architecture.py::TestVendorApiBoundary` is the guard, and it
-  strips comments first so prose explaining *why* an alias exists is allowed. Release the GIL
-  around launches — a library transforms data, it is not where GIL policy belongs.
+  strips comments first so prose explaining *why* an alias exists is allowed.
+- **C++: nothing here touches the GIL** (operator decision, V70). No `py::gil_scoped_release`
+  and no `gil_scoped_acquire` anywhere — `tests/test_architecture.py` guards it. A library
+  transforms data; GIL policy belongs to the server that embeds it. Where a stateful session
+  can race — a tracker's `track()` — one `std::mutex` on the session is the whole answer.
 - **C++ style** (`.clang-format`): `NamespaceIndentation: All`, `IndentAccessModifiers: true`,
   `PointerAlignment: Left` — so `float* dst`, not `float *dst`.
 - English for all documentation, comments and commit messages.
