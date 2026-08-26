@@ -1,28 +1,35 @@
-# C++/CUDA formatting for native/.
+# C++/CUDA formatting for csrc/.
 #
-# Two deviations from LLVM's defaults, both deliberate and both the project owner's
-# preference — written down here so clang-format enforces them instead of them being
-# re-litigated in review:
+# Google is the base because it is the style CUDA sample code, Thrust and pybind11 are all
+# written in, so a kernel copied out of NVIDIA's documentation needs no reshaping to fit.
+# Four deviations, all deliberate and all written down here so clang-format enforces them
+# instead of them being re-litigated in review:
 #
-#   NamespaceIndentation: All      namespace contents are indented, so nesting is visible
-#                                  at a glance instead of being inferred from a closing brace
-#                                  three hundred lines away.
+#   IndentWidth: 4                 four columns, matching the Python side. A file should not
+#                                  change shape depending on which language it is written in,
+#                                  and a two-space kernel next to a four-space binding is how
+#                                  a diff ends up full of whitespace nobody meant to touch.
+#   NamespaceIndentation: All      namespace contents are indented, so nesting is visible at a
+#                                  glance instead of being inferred from a closing brace three
+#                                  hundred lines away.
+#   IndentPPDirectives: BeforeHash the vendor seam in core/platform.h is one long `#if` with
+#                                  fifty directives inside it. Unindented, the nesting is
+#                                  invisible and it is genuinely hard to tell which branch a
+#                                  `#define` belongs to.
 #   IndentAccessModifiers: true    `public:` gets its own indentation level and members sit
 #                                  one level deeper, rather than the access specifier being
 #                                  outdented past the class body.
-#
-# ColumnLimit matches the Python side (black's line-length 96), so a file does not change
-# shape depending on which language it is written in.
 ---
 Language: Cpp
-BasedOnStyle: LLVM
+BasedOnStyle: Google
 
-IndentWidth: 2
-TabWidth: 2
+IndentWidth: 4
+TabWidth: 4
 UseTab: Never
-ColumnLimit: 96
+ColumnLimit: 100
 
 NamespaceIndentation: All
+IndentPPDirectives: BeforeHash
 IndentAccessModifiers: true
 CompactNamespaces: false
 FixNamespaceComments: true
@@ -30,7 +37,9 @@ FixNamespaceComments: true
 # `template <typename T> class Foo {` stays on one line when it fits.
 AlwaysBreakTemplateDeclarations: No
 
-# `char* p`, not `char *p`: the pointer is part of the type.
+# `char* p`, not `char *p`: the pointer is part of the type. DerivePointerAlignment must stay
+# off or Google's default infers the alignment per file, which means one stray `char *p` flips
+# the whole translation unit.
 PointerAlignment: Left
 ReferenceAlignment: Left
 DerivePointerAlignment: false
@@ -41,6 +50,10 @@ AllowShortLoopsOnASingleLine: false
 BreakBeforeBraces: Attach
 SeparateDefinitionBlocks: Leave
 
+# Preserve, not Google's Regroup. The vendor includes in core/platform.h sit inside the two
+# arms of an `#if defined(SHIPVISION_WITH_HIP)`; regrouping is free to hoist an include out of
+# the branch that guards it, which turns a formatting pass into a build break on the vendor
+# nobody compiled locally.
 SortIncludes: CaseSensitive
 IncludeBlocks: Preserve
 ...
