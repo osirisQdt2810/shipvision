@@ -10,11 +10,20 @@ production::
 
 CONVENTION 4 — COLOUR AND NORMALISATION, which this module owns
     Input is HWC uint8 **BGR**, because that is what every decoder in the fleet emits. Output
-    is NCHW float32 **RGB**, always: the swap is not optional, since a model trained on RGB
-    and fed BGR loses a few points of mAP and never errors. ``mean`` and ``std`` are in the
-    *source* 0-255 scale and in *destination* (RGB) channel order — the order a checkpoint's
-    published statistics are written in — and are applied as ``(value - mean) / std``. The
-    defaults, ``mean=0`` and ``std=255``, give ``[0, 1]``. Letterbox bars are filled with
+    is NCHW float32 **RGB** by default, because a model trained on RGB and fed BGR loses a few
+    points of mAP and never errors, so the swap has to be what a caller gets without asking for
+    it. ``swap_rb=False`` turns it off, for a model whose published preprocessing genuinely is
+    BGR. The kernel and the NV12 path had that switch all along; the BGR entry points passed a
+    literal ``True`` down to a binding that already took the argument, so the one thing C++
+    could do here could not be asked for from Python.
+
+    ``mean`` and ``std`` are in the *source* 0-255 scale and in **destination** channel order:
+    the order the output actually has, which is RGB under the default and BGR under
+    ``swap_rb=False``. They are applied as ``(value - mean) / std`` and are never reordered to
+    follow the flag — a caller asking for BGR output supplies BGR statistics, which is the
+    order a checkpoint publishes them in for a BGR model. The defaults, ``mean=0`` and
+    ``std=255``, are symmetric across the three channels, so turning the swap off changes
+    nothing about them and gives ``[0, 1]`` either way. Letterbox bars are filled with
     ``pad_value`` *before* normalisation, so a bar comes out as ``(pad_value - mean) / std``
     per channel.
 
@@ -361,8 +370,11 @@ class ImageOps(abc.ABC):
         pad_value: int = DEFAULT_PAD_VALUE,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> tuple[np.ndarray, list[LetterboxGeometry]]:
         """Resize-with-aspect-preserved, pad, BGR->RGB, normalise, HWC->NCHW, in one pass.
+
+        The channel swap is the one step that can be turned off — see ``swap_rb`` below.
 
         Args:
             images: one ``(h, w, 3)`` uint8 BGR image, or a sequence of them. The sequence may
@@ -370,8 +382,13 @@ class ImageOps(abc.ABC):
                 the native kernel takes a descriptor table.
             target_hw: the network input extent, ``(height, width)``.
             pad_value: fill for the letterbox bars, in the 0-255 source scale.
-            mean: per-channel mean in the 0-255 source scale, RGB order. ``None`` -> zeros.
+            mean: per-channel mean in the 0-255 source scale, in **destination** channel order
+                — the order the output actually has. ``None`` -> zeros.
             std: per-channel divisor, same scale and order. ``None`` -> 255.
+            swap_rb: ``True`` (the default) emits RGB from the BGR input, ``False`` emits BGR
+                unchanged. It names the destination order and nothing else: ``mean`` and
+                ``std`` are still indexed by destination plane, so a BGR request takes BGR
+                statistics. Convention 4.
 
         Returns:
             ``(n, 3, target_h, target_w)`` float32, and one
@@ -393,6 +410,7 @@ class ImageOps(abc.ABC):
         *,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> np.ndarray:
         """Crop each xyxy box out of one frame and resize it to ``target_hw``.
 
@@ -410,8 +428,11 @@ class ImageOps(abc.ABC):
             boxes: ``(n, 4)`` xyxy in that frame's pixels. An empty array is normal input, not
                 an error — most frames have no objects on most cameras.
             target_hw: the crop extent, ``(height, width)``.
-            mean: per-channel mean, 0-255 scale, RGB order. ``None`` -> zeros.
-            std: per-channel divisor. ``None`` -> 255.
+            mean: per-channel mean, 0-255 scale, in **destination** channel order — the order
+                the output actually has. ``None`` -> zeros.
+            std: per-channel divisor, same scale and order. ``None`` -> 255.
+            swap_rb: as :meth:`letterbox`. ``True`` emits RGB, ``False`` leaves the input's
+                BGR order.
 
         Returns:
             ``(n, 3, target_h, target_w)`` float32, in box order.
@@ -443,6 +464,7 @@ class ImageOps(abc.ABC):
         pad_value: int = DEFAULT_PAD_VALUE,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> list[LetterboxGeometry]:
         """:meth:`letterbox`, written straight into ``out`` instead of into a numpy array.
 
@@ -459,6 +481,7 @@ class ImageOps(abc.ABC):
             pad_value: as :meth:`letterbox`.
             mean: as :meth:`letterbox`.
             std: as :meth:`letterbox`.
+            swap_rb: as :meth:`letterbox`.
 
         Returns:
             One :class:`~shipvision.imgproc.geometry.LetterboxGeometry` per image, in input
@@ -484,12 +507,14 @@ class ImageOps(abc.ABC):
         *,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> None:
         """:meth:`crop_batch`, written straight into ``out``. See :meth:`letterbox_into`.
 
         Args:
             out: at least ``nchw_nbytes(len(boxes), target_hw)`` bytes, on this instance's
                 device.
+            swap_rb: as :meth:`crop_batch`.
 
         Raises:
             BackendUnavailableError: this backend has no device output path.
@@ -649,6 +674,7 @@ class ImageOps(abc.ABC):
         score_threshold: float = 0.0,
         min_neighbors: int = 0,
         min_score_sum: float = 0.0,
+        max_output: int | None = None,
     ) -> np.ndarray:
         """Class-agnostic suppression. Returns surviving indices, descending score first.
 
@@ -685,10 +711,24 @@ class ImageOps(abc.ABC):
                 takes it under. Inclusive: ``score >= score_threshold`` stays.
             min_neighbors: ``"neighborhood"`` only.
             min_score_sum: ``"neighborhood"`` only.
+            max_output: at most this many survivors, or ``None`` (the default) for no cap.
+                Applied **after** the method-specific suppression and rescoring, keeping the
+                top ``max_output`` by final score — decayed score, for a soft method —
+                descending, with ties still broken towards the lower input index. Because the
+                methods already return descending order it is a truncation, not a second sort,
+                which is what keeps it identical on the device: the CUDA sweep stops adding
+                once it holds that many, and the sweep visits survivors in the same order.
+                A cap is a *budget*, not a filter — it exists because a fixed-size downstream
+                tensor has room for k boxes and not because the k+1st was not a detection.
 
         Returns:
             ``(k,)`` int64 indices into the input, ordered by descending score — decayed
             score, for a soft method.
+
+        Raises:
+            ConfigurationError: ``max_output`` is negative or not a whole number. A negative
+                cap is refused rather than passed to a slice, where ``[:-1]`` would quietly
+                drop the *worst* survivor while the kernel returned nothing at all.
         """
 
     def nms_with_scores(
@@ -702,6 +742,7 @@ class ImageOps(abc.ABC):
         score_threshold: float = 0.0,
         min_neighbors: int = 0,
         min_score_sum: float = 0.0,
+        max_output: int | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """:meth:`nms`, but it also returns the score each survivor kept.
 
@@ -722,6 +763,10 @@ class ImageOps(abc.ABC):
         different route is the failure a test has to be written for on purpose, because nothing
         about the output looks wrong.
 
+        Args:
+            max_output: as :meth:`nms`. The cap is applied to the pair, so the scores that
+                come back are the scores of the boxes that came back.
+
         Returns:
             ``(indices, scores)``, both ``(k,)``, aligned and in descending score order.
             ``scores`` holds decayed values for ``"linear"``/``"gauss"`` and the original
@@ -737,6 +782,7 @@ class ImageOps(abc.ABC):
                 score_threshold=score_threshold,
                 min_neighbors=min_neighbors,
                 min_score_sum=min_score_sum,
+                max_output=max_output,
             )
 
         indices = self.nms(
@@ -748,6 +794,7 @@ class ImageOps(abc.ABC):
             score_threshold=score_threshold,
             min_neighbors=min_neighbors,
             min_score_sum=min_score_sum,
+            max_output=max_output,
         )
         # Re-read the scores through numpy rather than trusting the caller's container: `nms`
         # accepts anything array-like, and a list would not take an index array.

@@ -186,6 +186,7 @@ class NativeImageOps(ImageOps):
         pad_value: int = DEFAULT_PAD_VALUE,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> tuple[np.ndarray, list[LetterboxGeometry]]:
         """See :meth:`ImageOps.letterbox`."""
         self._claim_thread()
@@ -200,7 +201,7 @@ class NativeImageOps(ImageOps):
             target_w,
             mean_array.tolist(),
             std_array.tolist(),
-            True,
+            bool(swap_rb),
             int(pad_value),
             self._stream,
         )
@@ -218,6 +219,7 @@ class NativeImageOps(ImageOps):
         *,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> np.ndarray:
         """See :meth:`ImageOps.crop_batch`."""
         self._claim_thread()
@@ -233,7 +235,7 @@ class NativeImageOps(ImageOps):
             target_w,
             mean_array.tolist(),
             std_array.tolist(),
-            True,
+            bool(swap_rb),
             self._stream,
         )
         return np.asarray(crops, dtype=np.float32)
@@ -260,6 +262,7 @@ class NativeImageOps(ImageOps):
         pad_value: int = DEFAULT_PAD_VALUE,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> list[LetterboxGeometry]:
         """See :meth:`ImageOps.letterbox_into`. 8.6 ms where :meth:`letterbox` costs 44.7 ms
         for a batch of eight 1080p frames into 640x640 on this box."""
@@ -278,7 +281,7 @@ class NativeImageOps(ImageOps):
             target_w,
             mean_array.tolist(),
             std_array.tolist(),
-            True,
+            bool(swap_rb),
             int(pad_value),
             self._stream,
         )
@@ -428,6 +431,7 @@ class NativeImageOps(ImageOps):
         *,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> None:
         """See :meth:`ImageOps.crop_batch_into`."""
         self._claim_thread()
@@ -451,7 +455,7 @@ class NativeImageOps(ImageOps):
             target_w,
             mean_array.tolist(),
             std_array.tolist(),
-            True,
+            bool(swap_rb),
             self._stream,
         )
 
@@ -468,6 +472,7 @@ class NativeImageOps(ImageOps):
         score_threshold: float = 0.0,
         min_neighbors: int = 0,
         min_score_sum: float = 0.0,
+        max_output: int | None = None,
     ) -> np.ndarray:
         """See :meth:`ImageOps.nms`. ``"classic"`` runs on the device.
 
@@ -478,6 +483,14 @@ class NativeImageOps(ImageOps):
         dozen boxes that survive a score threshold there is nothing left to parallelise.
         Those methods run the shared numpy implementation, so every backend gives the same
         answer for them.
+
+        ``max_output`` is pushed all the way down to the kernel rather than applied to what it
+        returns. The C++ sweep already takes the argument — the Python side used to hand it the
+        box count, which is the same as no cap — and its stopping rule is
+        ``keep.size() < max_output`` over survivors visited in descending score, which is
+        exactly this method's contract. Pushing it down is also the only version that saves
+        anything: the sweep stops early instead of finishing 25 000 boxes and throwing the tail
+        away.
         """
         self._claim_thread()
         if method != CLASSIC:
@@ -490,6 +503,7 @@ class NativeImageOps(ImageOps):
                 score_threshold=score_threshold,
                 min_neighbors=min_neighbors,
                 min_score_sum=min_score_sum,
+                max_output=max_output,
             )[0]
 
         # prepare() validates and would raise for a bad method or threshold; the kernel does
@@ -501,15 +515,20 @@ class NativeImageOps(ImageOps):
             method=method,
             sigma=sigma,
             score_threshold=score_threshold,
+            max_output=max_output,
         )
         if box_array.shape[0] == 0:
             return np.zeros(0, dtype=np.int64)
+        # No cap is expressed as "as many as there are boxes", because the binding's argument
+        # is a plain int with no null: the sweep can never keep more survivors than candidates,
+        # so the box count is the identity budget.
+        budget = box_array.shape[0] if max_output is None else max_output
         kept = self._ops.nms(
             box_array,
             score_array,
             float(iou_threshold),
             float(score_threshold),
-            int(box_array.shape[0]),
+            int(budget),
             self._stream,
         )
         return np.asarray(kept, dtype=np.int64)

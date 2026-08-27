@@ -48,7 +48,7 @@ from shipvision.imgproc.geometry import (
     crop_centres,
     validate_target_hw,
 )
-from shipvision.imgproc.nms import CLASSIC, prepare, suppress
+from shipvision.imgproc.nms import CLASSIC, prepare, suppress, validate_max_output
 
 __all__ = ["TorchImageOps"]
 
@@ -115,10 +115,11 @@ class TorchImageOps(ImageOps):
         pad_value: int = DEFAULT_PAD_VALUE,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> tuple[np.ndarray, list[LetterboxGeometry]]:
         """See :meth:`ImageOps.letterbox`. The device-to-host copy is the last line."""
         canvas, geometries = self._letterbox_tensor(
-            images, target_hw, pad_value=pad_value, mean=mean, std=std
+            images, target_hw, pad_value=pad_value, mean=mean, std=std, swap_rb=swap_rb
         )
         return canvas.cpu().numpy(), geometries
 
@@ -130,6 +131,7 @@ class TorchImageOps(ImageOps):
         pad_value: int,
         mean: Sequence[float] | None,
         std: Sequence[float] | None,
+        swap_rb: bool,
     ) -> tuple[torch.Tensor, list[LetterboxGeometry]]:
         """The batch, still on this backend's device.
 
@@ -162,8 +164,10 @@ class TorchImageOps(ImageOps):
                 align_corners=False,
             )
             # flip(1) on a three-channel axis is the BGR -> RGB swap, and it happens before
-            # normalisation so mean/std stay in destination (RGB) order.
-            normalised = (resized.flip(1) - mean_t) / std_t
+            # normalisation so mean/std stay in destination order — the order the output has,
+            # which is BGR when the caller turned the swap off.
+            ordered = resized.flip(1) if swap_rb else resized
+            normalised = (ordered - mean_t) / std_t
             canvas[
                 index : index + 1,
                 :,
@@ -180,9 +184,10 @@ class TorchImageOps(ImageOps):
         *,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> np.ndarray:
         """See :meth:`ImageOps.crop_batch`. The device-to-host copy is the last line."""
-        crops = self._crop_tensor(image, boxes, target_hw, mean=mean, std=std)
+        crops = self._crop_tensor(image, boxes, target_hw, mean=mean, std=std, swap_rb=swap_rb)
         return crops.cpu().numpy()
 
     def _crop_tensor(
@@ -193,6 +198,7 @@ class TorchImageOps(ImageOps):
         *,
         mean: Sequence[float] | None,
         std: Sequence[float] | None,
+        swap_rb: bool,
     ) -> torch.Tensor:
         """The crops, still on this backend's device. See :meth:`_letterbox_tensor`."""
         frame = validate_image(image)
@@ -233,7 +239,10 @@ class TorchImageOps(ImageOps):
         if degenerate.any():
             crops[torch.from_numpy(degenerate).to(self._device)] = 0.0
 
-        return (crops.flip(1) - self._as_channel_vector(mean_array)) / (
+        # As in `_letterbox_tensor`: flip(1) is the BGR -> RGB swap, skipped when the caller
+        # asked for BGR out, and mean/std are indexed by destination plane either way.
+        ordered = crops.flip(1) if swap_rb else crops
+        return (ordered - self._as_channel_vector(mean_array)) / (
             self._as_channel_vector(std_array)
         )
 
@@ -254,6 +263,7 @@ class TorchImageOps(ImageOps):
         pad_value: int = DEFAULT_PAD_VALUE,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> list[LetterboxGeometry]:
         """See :meth:`ImageOps.letterbox_into`.
 
@@ -263,7 +273,7 @@ class TorchImageOps(ImageOps):
         pointer is refused rather than silently downgraded to a host round trip.
         """
         canvas, geometries = self._letterbox_tensor(
-            images, target_hw, pad_value=pad_value, mean=mean, std=std
+            images, target_hw, pad_value=pad_value, mean=mean, std=std, swap_rb=swap_rb
         )
         self._write_through_owner(canvas, out, what="letterbox output")
         return geometries
@@ -277,9 +287,10 @@ class TorchImageOps(ImageOps):
         *,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> None:
         """See :meth:`ImageOps.crop_batch_into`."""
-        crops = self._crop_tensor(image, boxes, target_hw, mean=mean, std=std)
+        crops = self._crop_tensor(image, boxes, target_hw, mean=mean, std=std, swap_rb=swap_rb)
         if crops.numel() == 0:
             return
         self._write_through_owner(crops, out, what="crop output")
@@ -324,6 +335,7 @@ class TorchImageOps(ImageOps):
         score_threshold: float = 0.0,
         min_neighbors: int = 0,
         min_score_sum: float = 0.0,
+        max_output: int | None = None,
     ) -> np.ndarray:
         """See :meth:`ImageOps.nms`. ``"classic"`` goes to ``torchvision.ops.nms``."""
         if method != CLASSIC:
@@ -336,6 +348,7 @@ class TorchImageOps(ImageOps):
                 score_threshold=score_threshold,
                 min_neighbors=min_neighbors,
                 min_score_sum=min_score_sum,
+                max_output=max_output,
             )[0]
 
         box_array, score_array, order = prepare(
@@ -345,6 +358,7 @@ class TorchImageOps(ImageOps):
             method=method,
             sigma=sigma,
             score_threshold=score_threshold,
+            max_output=max_output,
         )
         if order.size == 0:
             return np.zeros(0, dtype=np.int64)
@@ -355,6 +369,15 @@ class TorchImageOps(ImageOps):
             torch.from_numpy(score_array[order]).to(self._device),
             float(iou_threshold),
         )
+        # The cap is a slice of torchvision's own output, which is already descending score.
+        # `torchvision.ops.nms` has no budget argument, so there is nothing to push down into
+        # it — and taking the head of a sorted result is exactly what the CUDA sweep does when
+        # it stops early, so the two backends truncate the same list at the same place.
+        # Normalised for the same reason as `suppress()`: a whole-valued float cap passes
+        # validation and must slice as the int it names, not raise (#12 round 1).
+        max_output = validate_max_output(max_output)
+        if max_output is not None:
+            kept = kept[:max_output]
         return order[kept.cpu().numpy()].astype(np.int64)
 
     # -- helpers ----------------------------------------------------------------------
