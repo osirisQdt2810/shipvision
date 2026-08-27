@@ -25,6 +25,10 @@ The rules, stated once:
   :func:`~shipvision.imgproc.nms.greedy.greedy`.
 * **Departure**: a candidate leaves the pool when its decayed score drops below
   ``score_threshold`` or reaches zero — see :func:`~shipvision.imgproc.nms.greedy.greedy`.
+* **The cap**, ``max_output``, is applied last and changes nothing about the suppression that
+  produced the survivors. It keeps the best ``max_output`` of them by final score, which over
+  an answer that is already in descending order is a truncation — so it is one line in
+  :func:`suppress` rather than a rule the five methods each have to obey. ``None`` is no cap.
 
 Layout: :mod:`~shipvision.imgproc.nms.candidates` decides who competes and in what order,
 :mod:`~shipvision.imgproc.nms.greedy` runs classic and soft NMS, and
@@ -45,6 +49,7 @@ from shipvision.imgproc.nms.candidates import (
     NONE,
     SOFT_METHODS,
     prepare,
+    validate_max_output,
 )
 from shipvision.imgproc.nms.greedy import decay_weights, greedy
 from shipvision.imgproc.nms.neighborhood import neighborhood
@@ -62,6 +67,7 @@ __all__ = [
     "neighborhood",
     "prepare",
     "suppress",
+    "validate_max_output",
 ]
 
 
@@ -75,13 +81,30 @@ def suppress(
     score_threshold: float = 0.0,
     min_neighbors: int = 0,
     min_score_sum: float = 0.0,
+    max_output: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run one of the five methods and return ``(kept_indices, kept_scores)``.
 
     ``kept_scores`` carries the decayed value for the soft methods and the original score for
     every other one, so a caller can threshold soft-NMS's real output instead of guessing at
     it. Both arrays are in descending score order.
+
+    ``max_output`` caps how many survivors come back, ``None`` meaning no cap. It is applied
+    *here*, on the dispatcher's way out, and not inside the five methods: every one of them
+    already returns descending final score — the greedy loops pick the running maximum and a
+    decay only ever lowers a score, so the picks cannot rise, and ``none`` returns the
+    admission order — so the cap is one truncation of an already-sorted pair rather than five
+    copies of a top-k. Five copies is what it would have taken to put it inside the methods,
+    and it is the shape this package exists to avoid: the departure rule and the tie order
+    drifted between implementations in the reference this replaces, and they were far more
+    visible than a cap would be.
     """
+    # Keep the normalised cap, not the caller's object: `validate_max_output(2.0)` accepts
+    # a whole-valued float, and slicing with the original would then raise TypeError here on
+    # the first frame while the native backend, which converts, runs correctly for weeks —
+    # the validator's own return value exists precisely so this seam is one number on every
+    # backend (#12 round 1).
+    max_output = validate_max_output(max_output)
     box_array, score_array, order = prepare(
         boxes,
         scores,
@@ -89,13 +112,15 @@ def suppress(
         method=method,
         sigma=sigma,
         score_threshold=score_threshold,
+        max_output=max_output,
     )
     if order.size == 0:
         return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.float32)
+
     if method == NONE:
-        return order.astype(np.int64), score_array[order]
-    if method == NEIGHBORHOOD:
-        return neighborhood(
+        kept, kept_scores = order.astype(np.int64), score_array[order]
+    elif method == NEIGHBORHOOD:
+        kept, kept_scores = neighborhood(
             box_array,
             score_array,
             order,
@@ -103,12 +128,21 @@ def suppress(
             min_neighbors=min_neighbors,
             min_score_sum=min_score_sum,
         )
-    return greedy(
-        box_array,
-        score_array,
-        order,
-        iou_threshold=iou_threshold,
-        method=method,
-        sigma=sigma,
-        score_threshold=score_threshold,
-    )
+    else:
+        kept, kept_scores = greedy(
+            box_array,
+            score_array,
+            order,
+            iou_threshold=iou_threshold,
+            method=method,
+            sigma=sigma,
+            score_threshold=score_threshold,
+        )
+
+    if max_output is None:
+        return kept, kept_scores
+    # A slice and not an argsort: the pair is already sorted by final score with ties broken
+    # towards the lower input index, and re-sorting it would put that tie order back at the
+    # mercy of the sort's stability. Both arrays are cut together — a capped index list beside
+    # an uncapped score list is the kind of misalignment nothing downstream can detect.
+    return kept[:max_output], kept_scores[:max_output]

@@ -56,6 +56,7 @@ class NumpyImageOps(ImageOps):
         pad_value: int = DEFAULT_PAD_VALUE,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> tuple[np.ndarray, list[LetterboxGeometry]]:
         """See :meth:`ImageOps.letterbox`."""
         frames = as_image_batch(images)
@@ -79,7 +80,7 @@ class NumpyImageOps(ImageOps):
                 :,
                 geometry.pad_top : geometry.pad_top + geometry.resized_height,
                 geometry.pad_left : geometry.pad_left + geometry.resized_width,
-            ] = _to_nchw_rgb(resized, mean_array, std_array)
+            ] = _to_nchw(resized, mean_array, std_array, swap_rb=swap_rb)
         return out, geometries
 
     @property
@@ -148,6 +149,7 @@ class NumpyImageOps(ImageOps):
         *,
         mean: Sequence[float] | None = None,
         std: Sequence[float] | None = None,
+        swap_rb: bool = True,
     ) -> np.ndarray:
         """See :meth:`ImageOps.crop_batch`."""
         frame = validate_image(image)
@@ -170,7 +172,7 @@ class NumpyImageOps(ImageOps):
                 frame, crop_centres(y1, y2, target_h), crop_centres(x1, x2, target_w)
             )
 
-        return _to_nchw_rgb(raw, mean_array, std_array)
+        return _to_nchw(raw, mean_array, std_array, swap_rb=swap_rb)
 
     def nms(
         self,
@@ -183,6 +185,7 @@ class NumpyImageOps(ImageOps):
         score_threshold: float = 0.0,
         min_neighbors: int = 0,
         min_score_sum: float = 0.0,
+        max_output: int | None = None,
     ) -> np.ndarray:
         """See :meth:`ImageOps.nms`."""
         return suppress(
@@ -194,6 +197,7 @@ class NumpyImageOps(ImageOps):
             score_threshold=score_threshold,
             min_neighbors=min_neighbors,
             min_score_sum=min_score_sum,
+            max_output=max_output,
         )[0]
 
 
@@ -251,7 +255,7 @@ def _normalise_planar(
 ) -> np.ndarray:
     """``(..., h, w, 3)`` **RGB** source values -> ``(..., 3, h, w)`` normalised.
 
-    The counterpart of :func:`_to_nchw_rgb` for a path whose source is already RGB: the NV12
+    The counterpart of :func:`_to_nchw` for a path whose source is already RGB: the NV12
     decode produces RGB, so ``swap_rb=True`` is the identity here and ``False`` is what asks
     for BGR. ``mean`` and ``std`` are indexed by *destination* plane either way, which is the
     one thing both paths must agree on — the kernel indexes them the same way, so a BGR
@@ -262,12 +266,20 @@ def _normalise_planar(
     return ((planar - mean[:, None, None]) / std[:, None, None]).astype(np.float32)
 
 
-def _to_nchw_rgb(values: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
-    """``(..., h, w, 3)`` BGR source values -> ``(..., 3, h, w)`` normalised RGB.
+def _to_nchw(
+    values: np.ndarray, mean: np.ndarray, std: np.ndarray, *, swap_rb: bool
+) -> np.ndarray:
+    """``(..., h, w, 3)`` **BGR** source values -> ``(..., 3, h, w)`` normalised.
 
-    Convention 4: the channel swap happens first, so ``mean`` and ``std`` are indexed in
-    destination (RGB) order — the order a checkpoint's published statistics are written in.
+    The mirror image of :func:`_normalise_planar`, whose source is already RGB, and the reason
+    both exist: which flag value reverses the channel axis depends on what came in, and naming
+    the source order in the function is how a call site cannot get that backwards.
+
+    Convention 4: the swap happens first, so ``mean`` and ``std`` are indexed by *destination*
+    plane — RGB under ``swap_rb=True``, BGR under ``False`` — and are not reordered here. Under
+    the symmetric defaults (0 and 255) the two flag values give the same tensor, so a backend
+    that ignored the flag would still pass every default-normalisation test.
     """
-    swapped = values[..., ::-1]
-    planar = np.moveaxis(swapped, -1, -3)
+    ordered = values[..., ::-1] if swap_rb else values
+    planar = np.moveaxis(ordered, -1, -3)
     return ((planar - mean[:, None, None]) / std[:, None, None]).astype(np.float32)
