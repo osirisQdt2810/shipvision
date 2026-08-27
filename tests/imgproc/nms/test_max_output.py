@@ -72,6 +72,17 @@ class TestTheCapCountsSurvivors:
         assert uncapped == DESCENDING
         assert capped == uncapped[:cap]
 
+    def test_a_whole_valued_float_cap_is_the_same_answer_as_its_int(self, ops) -> None:
+        """#12 round 1: `validate_max_output(2.0)` accepts a whole-valued float, and the
+        python/torch paths then sliced with the caller's original object — TypeError on the
+        first frame — while the native backend converted and ran correctly for weeks. The
+        normalised value must be the one that slices, on every backend."""
+        as_float = run(ops, FOUR_SURVIVORS, FOUR_SCORES, iou_threshold=0.5, max_output=2.0)
+
+        assert as_float == run(
+            ops, FOUR_SURVIVORS, FOUR_SCORES, iou_threshold=0.5, max_output=2
+        )
+
     def test_a_cap_larger_than_the_survivor_count_is_a_no_op(self, ops) -> None:
         capped = run(ops, FOUR_SURVIVORS, FOUR_SCORES, iou_threshold=0.5, max_output=99)
 

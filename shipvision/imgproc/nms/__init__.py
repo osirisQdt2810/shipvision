@@ -99,6 +99,12 @@ def suppress(
     drifted between implementations in the reference this replaces, and they were far more
     visible than a cap would be.
     """
+    # Keep the normalised cap, not the caller's object: `validate_max_output(2.0)` accepts
+    # a whole-valued float, and slicing with the original would then raise TypeError here on
+    # the first frame while the native backend, which converts, runs correctly for weeks —
+    # the validator's own return value exists precisely so this seam is one number on every
+    # backend (#12 round 1).
+    max_output = validate_max_output(max_output)
     box_array, score_array, order = prepare(
         boxes,
         scores,

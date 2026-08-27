@@ -48,7 +48,7 @@ from shipvision.imgproc.geometry import (
     crop_centres,
     validate_target_hw,
 )
-from shipvision.imgproc.nms import CLASSIC, prepare, suppress
+from shipvision.imgproc.nms import CLASSIC, prepare, suppress, validate_max_output
 
 __all__ = ["TorchImageOps"]
 
@@ -373,6 +373,9 @@ class TorchImageOps(ImageOps):
         # `torchvision.ops.nms` has no budget argument, so there is nothing to push down into
         # it — and taking the head of a sorted result is exactly what the CUDA sweep does when
         # it stops early, so the two backends truncate the same list at the same place.
+        # Normalised for the same reason as `suppress()`: a whole-valued float cap passes
+        # validation and must slice as the int it names, not raise (#12 round 1).
+        max_output = validate_max_output(max_output)
         if max_output is not None:
             kept = kept[:max_output]
         return order[kept.cpu().numpy()].astype(np.int64)
