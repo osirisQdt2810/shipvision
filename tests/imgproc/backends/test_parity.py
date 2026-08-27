@@ -140,6 +140,30 @@ class TestLetterboxAgreesOnARaggedBatch:
 
         assert np.abs(actual - expected).max() < VALUE_TOLERANCE * 2
 
+    def test_letterbox_agrees_with_the_swap_turned_off(
+        self, candidate, oracle, bgr_image
+    ) -> None:
+        """``swap_rb=False`` on noise, with an asymmetric normalisation so the flag is visible.
+
+        The premise is asserted first, because a parity test alone would be vacuous here: two
+        backends that both ignored ``swap_rb`` agree with each other perfectly. Requiring the
+        oracle's two settings to differ is what makes the comparison mean something.
+        """
+        mean = (123.675, 116.28, 103.53)
+        std = (58.395, 57.12, 57.375)
+
+        swapped, _ = oracle.letterbox(bgr_image, (256, 128), mean=mean, std=std, swap_rb=True)
+        expected, _ = oracle.letterbox(bgr_image, (256, 128), mean=mean, std=std, swap_rb=False)
+        actual, _ = candidate.letterbox(
+            bgr_image, (256, 128), mean=mean, std=std, swap_rb=False
+        )
+
+        assert np.abs(swapped - expected).max() > VALUE_TOLERANCE, (
+            "the two swap_rb settings produced the same tensor, so this comparison cannot see "
+            "a backend that ignores the flag"
+        )
+        assert np.abs(actual - expected).max() < VALUE_TOLERANCE * 2
+
     # ------------------------------------------------------------------------------ crops
 
     def test_crop_agrees_with_the_oracle(self, candidate, oracle, bgr_image) -> None:
@@ -167,6 +191,32 @@ class TestLetterboxAgreesOnARaggedBatch:
         expected = oracle.crop_batch(bgr_image, CROP_BOXES, (48, 48), mean=mean, std=std)
         actual = candidate.crop_batch(bgr_image, CROP_BOXES, (48, 48), mean=mean, std=std)
 
+        assert np.abs(actual - expected).max() < VALUE_TOLERANCE * 2
+
+    def test_crop_agrees_with_the_swap_turned_off(self, candidate, oracle, bgr_image) -> None:
+        """The same claim on the crop sampler, over the same awkward boxes.
+
+        Worth repeating rather than trusting the letterbox case: the swap happens at a
+        different point in each path — after ``F.interpolate`` in one and after a batched
+        ``grid_sample`` in the other — and the zero-area rows normalise through it too.
+        """
+        mean = (123.675, 116.28, 103.53)
+        std = (58.395, 57.12, 57.375)
+
+        swapped = oracle.crop_batch(
+            bgr_image, CROP_BOXES, (48, 48), mean=mean, std=std, swap_rb=True
+        )
+        expected = oracle.crop_batch(
+            bgr_image, CROP_BOXES, (48, 48), mean=mean, std=std, swap_rb=False
+        )
+        actual = candidate.crop_batch(
+            bgr_image, CROP_BOXES, (48, 48), mean=mean, std=std, swap_rb=False
+        )
+
+        assert np.abs(swapped - expected).max() > VALUE_TOLERANCE, (
+            "the two swap_rb settings produced the same crops, so this comparison cannot see "
+            "a backend that ignores the flag"
+        )
         assert np.abs(actual - expected).max() < VALUE_TOLERANCE * 2
 
     def test_an_empty_frame_crops_to_an_empty_batch_everywhere(
@@ -213,6 +263,28 @@ class TestLetterboxAgreesOnARaggedBatch:
         actual = candidate.nms(boxes, scores, iou_threshold=0.45, score_threshold=0.4)
 
         assert actual.tolist() == expected.tolist()
+
+    @pytest.mark.parametrize("max_output", [1, 5, 50])
+    def test_classic_nms_agrees_under_a_survivor_cap(
+        self, candidate, oracle, max_output: int
+    ) -> None:
+        """The one case where the backends implement the cap by genuinely different means.
+
+        numpy truncates the finished list, torch slices ``torchvision.ops.nms``'s output, and
+        the C++ sweep stops early — it never even builds the tail. Those agree only because the
+        sweep visits survivors in descending score, which is the fact this asserts on real
+        proposals rather than on the four hand-built boxes next door. The premise, that the cap
+        actually bites, is asserted too: at 400 proposals and IoU 0.5 the uncapped answer is
+        far longer than 50.
+        """
+        boxes, scores = _proposals(seed=7, count=400)
+
+        uncapped = oracle.nms(boxes, scores, iou_threshold=0.5)
+        expected = oracle.nms(boxes, scores, iou_threshold=0.5, max_output=max_output)
+        actual = candidate.nms(boxes, scores, iou_threshold=0.5, max_output=max_output)
+
+        assert len(uncapped) > max_output, "the cap does not bite, so this proves nothing"
+        assert actual.tolist() == expected.tolist() == uncapped.tolist()[:max_output]
 
     def test_nms_agrees_on_no_boxes_at_all(self, candidate, oracle) -> None:
         empty_boxes = np.zeros((0, 4), dtype=np.float32)
