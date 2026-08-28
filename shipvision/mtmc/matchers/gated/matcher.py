@@ -20,10 +20,10 @@ from collections.abc import Sequence
 import numpy as np
 
 from shipvision.mtmc.base import BaseMatcher
-from shipvision.mtmc.core.appearance import AppearanceMatcher
-from shipvision.mtmc.core.gated.utils import veto
-from shipvision.mtmc.core.spatial import SpatialMatcher
 from shipvision.mtmc.frames import TrackObservation
+from shipvision.mtmc.matchers.appearance import AppearanceMatcher
+from shipvision.mtmc.matchers.gated.utils import veto
+from shipvision.mtmc.matchers.spatial import SpatialMatcher
 from shipvision.mtmc.registry import MTMC_MATCHERS
 from shipvision.mtmc.topology import GroundPlane
 from shipvision.registry import PYTHON
@@ -53,8 +53,8 @@ class GatedMatcher(BaseMatcher):
                 ``gated`` is a safe default.
             appearance_threshold: see :class:`AppearanceMatcher`.
             spatial_threshold: see :class:`SpatialMatcher`.
-            foot_ratio: see :func:`~shipvision.mtmc.core.spatial.utils.foot_points`.
-            aspect_ratio: see :func:`~shipvision.mtmc.core.spatial.utils.foot_points`.
+            foot_ratio: see :func:`~shipvision.mtmc.matchers.spatial.utils.foot_points`.
+            aspect_ratio: see :func:`~shipvision.mtmc.matchers.spatial.utils.foot_points`.
             appearance: a pre-built appearance matcher, overriding the threshold arguments.
                 For A/B-ing one half of the gate without rebuilding the other.
             spatial: a pre-built spatial matcher, likewise.

@@ -18,7 +18,7 @@
 // backend exists to remove. Camera identity crosses as an integer code, for the reason
 // `shipvision/mtmc/frames.h` gives. The embeddings do not cross at all; their gram matrix does,
 // because `features @ features.T` is BLAS's job and numpy already has it — see
-// `core/appearance/matcher.h`.
+// `matchers/appearance/matcher.h`.
 //
 // One contract the codes carry that is worth stating: a matcher's ground plane is INDEXED BY
 // THE SAME CODES the instant uses, so the two are chosen together. Any consistent numbering

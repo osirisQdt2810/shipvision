@@ -1,6 +1,6 @@
 // Cosine appearance similarity, hard-thresholded, with same-camera pairs excluded.
 //
-// The C++ twin of `shipvision/mtmc/core/appearance/matcher.py`, and the baseline matcher: the
+// The C++ twin of `shipvision/mtmc/matchers/appearance/matcher.py`, and the baseline matcher: the
 // only one that works on an uncalibrated site, and the right thing to compose a geometric gate
 // on top of rather than a competitor to it.
 //

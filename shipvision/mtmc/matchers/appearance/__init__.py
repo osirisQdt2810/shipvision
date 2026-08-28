@@ -6,7 +6,7 @@ Importing this package registers the matcher, which is what makes
 
 from __future__ import annotations
 
-from shipvision.mtmc.core.appearance.matcher import AppearanceMatcher
-from shipvision.mtmc.core.appearance.utils import stack_embeddings
+from shipvision.mtmc.matchers.appearance.matcher import AppearanceMatcher
+from shipvision.mtmc.matchers.appearance.utils import stack_embeddings
 
 __all__ = ["AppearanceMatcher", "stack_embeddings"]

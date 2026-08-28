@@ -5,7 +5,7 @@ and it is much harder to fool: two crew members in identical overalls score high
 appearance from any model, and are forty metres apart on the quay.
 
 The per-object estimate — which pixel is under an object's feet, including when the frame cut
-them off — lives next door in :mod:`shipvision.mtmc.core.spatial.utils`. This module is about
+them off — lives next door in :mod:`shipvision.mtmc.matchers.spatial.utils`. This module is about
 what to do with those points once a homography has put them on one map.
 """
 
@@ -17,8 +17,8 @@ import numpy as np
 
 from shipvision.errors import ConfigurationError
 from shipvision.mtmc.base import BaseMatcher
-from shipvision.mtmc.core.spatial.utils import foot_points
 from shipvision.mtmc.frames import TrackObservation
+from shipvision.mtmc.matchers.spatial.utils import foot_points
 from shipvision.mtmc.registry import MTMC_MATCHERS
 from shipvision.mtmc.topology import GroundPlane
 from shipvision.registry import PYTHON
@@ -32,7 +32,7 @@ class SpatialMatcher(BaseMatcher):
 
     Usable on its own only where every camera is calibrated and the scene is sparse enough
     that position alone identifies an object; its real job is to be the gate inside
-    :class:`~shipvision.mtmc.core.gated.matcher.GatedMatcher`. The two are kept as separate
+    :class:`~shipvision.mtmc.matchers.gated.matcher.GatedMatcher`. The two are kept as separate
     classes so that the projection has a test of its own — a gate whose geometry is wrong and
     whose appearance is right produces output that looks fine until two people walk past each
     other.
@@ -54,8 +54,8 @@ class SpatialMatcher(BaseMatcher):
             spatial_threshold: how far apart, in ground-plane units, two projections may be
                 and still be the same object. The reference's production value is 280 map
                 pixels. Used by :meth:`build`; the gate reads its own copy.
-            foot_ratio: see :func:`~shipvision.mtmc.core.spatial.utils.foot_points`.
-            aspect_ratio: see :func:`~shipvision.mtmc.core.spatial.utils.foot_points`.
+            foot_ratio: see :func:`~shipvision.mtmc.matchers.spatial.utils.foot_points`.
+            aspect_ratio: see :func:`~shipvision.mtmc.matchers.spatial.utils.foot_points`.
         """
         if spatial_threshold <= 0.0:
             raise ConfigurationError(

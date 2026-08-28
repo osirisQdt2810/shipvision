@@ -3,7 +3,7 @@
 // The C++ twin of `shipvision/mtmc/frames.py`, reduced to the fields the (n, n) passes read.
 // `TrackKey`, the `Track` itself and the embedding do not cross. An identity map keyed on
 // (camera, track) is Python's to own — it is the stateful half — and the embeddings reach here
-// already multiplied into a gram matrix, for the reason `core/appearance/matcher.h` gives.
+// already multiplied into a gram matrix, for the reason `matchers/appearance/matcher.h` gives.
 //
 // Camera identity crosses as an INTEGER CODE, never as a name. The reference implementation
 // this library replaces compared camera strings pairwise to build the same-camera exclusion,

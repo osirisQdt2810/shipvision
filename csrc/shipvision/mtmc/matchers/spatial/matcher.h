@@ -1,6 +1,6 @@
 // Ground-plane geometry: where each track is standing, and how far apart two are.
 //
-// The C++ twin of `shipvision/mtmc/core/spatial/matcher.py`. Appearance says two crops look
+// The C++ twin of `shipvision/mtmc/matchers/spatial/matcher.py`. Appearance says two crops look
 // alike. Geometry says whether they *can* be the same object, and it is much harder to fool:
 // two crew members in identical overalls score high on appearance from any model, and are forty
 // metres apart on the quay.

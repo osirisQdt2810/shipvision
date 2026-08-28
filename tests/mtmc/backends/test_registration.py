@@ -16,8 +16,8 @@ import pytest
 from shipvision.errors import BackendUnavailableError
 from shipvision.mtmc import MTMC_MATCHERS
 from shipvision.mtmc.backends import native
-from shipvision.mtmc.core.appearance import AppearanceMatcher
-from shipvision.mtmc.core.gated import GatedMatcher
+from shipvision.mtmc.matchers.appearance import AppearanceMatcher
+from shipvision.mtmc.matchers.gated import GatedMatcher
 from shipvision.registry import NATIVE, PYTHON
 
 NAMES = ["appearance", "gated", "spatial"]

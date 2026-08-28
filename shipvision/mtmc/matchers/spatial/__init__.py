@@ -6,7 +6,7 @@ Importing this package registers the matcher, which is what makes
 
 from __future__ import annotations
 
-from shipvision.mtmc.core.spatial.matcher import SpatialMatcher
-from shipvision.mtmc.core.spatial.utils import foot_points
+from shipvision.mtmc.matchers.spatial.matcher import SpatialMatcher
+from shipvision.mtmc.matchers.spatial.utils import foot_points
 
 __all__ = ["SpatialMatcher", "foot_points"]

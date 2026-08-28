@@ -2,8 +2,8 @@
 
 ``test_parity.py`` next door checks the individual fused passes — threshold, ground distance,
 gate, veto, distance conversion — each against its numpy twin. This file checks the layer above
-it: the whole matchers of :mod:`shipvision.mtmc.core` ported to C++ under
-``csrc/shipvision/mtmc/core/``, the average-linkage clusterer that consumes their matrices, and
+it: the whole matchers of :mod:`shipvision.mtmc.matchers` ported to C++ under
+``csrc/shipvision/mtmc/matchers/``, the average-linkage clusterer that consumes their matrices, and
 the identities that come out of the far end.
 
 Three claims, in the order they build on each other:
@@ -41,7 +41,7 @@ from shipvision.mtmc import (
     foot_points,
 )
 from shipvision.mtmc.backends.native import native_available
-from shipvision.mtmc.core.appearance.utils import stack_embeddings
+from shipvision.mtmc.matchers.appearance.utils import stack_embeddings
 from shipvision.registry import NATIVE, PYTHON
 from shipvision.reid.distance import cosine_similarity
 from tests.mtmc.conftest import (

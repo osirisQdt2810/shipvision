@@ -4,7 +4,7 @@ The decomposition is the reference's and it is worth keeping, because each seam 
 where a real question gets a separate answer:
 
 1. **Gate** — which tracks are worth asking about (:mod:`shipvision.mtmc.gating`).
-2. **Match** — how alike every pair is (:mod:`shipvision.mtmc.core`).
+2. **Match** — how alike every pair is (:mod:`shipvision.mtmc.matchers`).
 3. **Cluster** — which of them are the same object right now
    (:mod:`shipvision.mtmc.clustering`).
 4. **Identity** — and which object that is, across time
