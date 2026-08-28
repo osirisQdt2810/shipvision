@@ -90,9 +90,12 @@ def reduce_problem(
     the solver's answer is in submatrix positions, and using those as track indices associates
     the wrong objects while every shape still agrees — the same trap
     :func:`~shipvision.mot.association.solver.associate_subset` exists to close one level up.
+
+    ``np.ix_`` is advanced indexing, so ``reduced`` is a fresh array, never a view — do not
+    "optimise" the no-op case into returning ``cost``, which the mask half will write into.
     """
     taken_rows = {row for row, _ in locked}
     taken_columns = {column for _, column in locked}
     kept_rows = [row for row in range(cost.shape[0]) if row not in taken_rows]
     kept_columns = [column for column in range(cost.shape[1]) if column not in taken_columns]
-    return np.asarray(cost)[np.ix_(kept_rows, kept_columns)].copy(), kept_rows, kept_columns
+    return np.asarray(cost)[np.ix_(kept_rows, kept_columns)], kept_rows, kept_columns

@@ -19,8 +19,10 @@ import numpy as np
 import pytest
 
 import shipvision.mot.trackers.mcbyte.tracker as mcbyte_module
+from shipvision.errors import ConfigurationError
 from shipvision.mot import TRACKERS
 from shipvision.mot.motion import IDENTITY_AFFINE
+from shipvision.types import Detection
 from tests.mot.backends.conftest import assert_same_tracking
 from tests.mot.conftest import det, drive, frame
 
@@ -32,16 +34,23 @@ WIDTH, HEIGHT, ROW = 100.0, 200.0, 400.0
 LEFT, RIGHT = 500.0, 572.0
 CLOSE, WIDE = 523.0, 452.0
 
+#: A third object, far enough away to share no cost with the other two, and a score in
+#: ByteTrack's low tier. Together they put the stolen pair in the *second* association: the
+#: detector is still visibly working, so stage one runs, and it runs on the far box alone.
+FAR, LOW_SCORE = 1400.0, 0.3
 
-def settle(tracker: object) -> tuple[int, int]:
-    """Six frames of two stationary objects; returns ``(left_id, right_id)``."""
-    published = drive(
-        tracker,
-        [[det(LEFT, ROW, w=WIDTH, h=HEIGHT), det(RIGHT, ROW, w=WIDTH, h=HEIGHT)]] * 6,
-    )
+
+def settled_scene(*extra: Detection) -> list[Detection]:
+    """The two objects the stolen pair is about, plus whatever else the scenario needs."""
+    return [det(LEFT, ROW, w=WIDTH, h=HEIGHT), det(RIGHT, ROW, w=WIDTH, h=HEIGHT), *extra]
+
+
+def settle(tracker: object, *extra: Detection) -> list[int]:
+    """Six frames of stationary objects; returns the published ids, left to right."""
+    published = drive(tracker, [settled_scene(*extra)] * 6)
     by_x = sorted(published[-1], key=lambda track: float(track.box[0]))
-    assert len(by_x) == 2, "the scenario needs both objects tracked before the stolen frame"
-    return by_x[0].track_id, by_x[1].track_id
+    assert len(by_x) == 2 + len(extra), "every object must be tracked before the stolen frame"
+    return [track.track_id for track in by_x]
 
 
 def stolen_frame(tracker: object) -> list:
@@ -94,6 +103,75 @@ class TestClearMatchLocking:
         assert stolen_frame(tracker) == []
 
 
+class TestLockingOnTheSecondAssociationStage:
+    """The low-score pass, where losing a pair is losing an identity through an occlusion.
+
+    Stage two exists because a tracked object behind a pillar is still detected, at 0.3
+    instead of 0.9. That box is the *only* evidence the track has, and the solver will still
+    spend it on a cheaper pair it then throws away — so the trade the paper is about is more
+    expensive here than in stage one, not less.
+
+    The two match thresholds are deliberately unequal, so locking applied to stage one only
+    is a different answer here rather than the same answer twice.
+    """
+
+    def build(self, name: str, **options: object) -> object:
+        return TRACKERS.build(
+            name,
+            backend="python",
+            min_hits=2,
+            max_age=10,
+            match_threshold=0.5,
+            second_match_threshold=0.45,
+            **options,
+        )
+
+    def occluded_frame(self, tracker: object, *, missing: int) -> list[int]:
+        """Drop the pair for ``missing`` frames, then give it back at a low score.
+
+        ``missing=0`` leaves both tracks CONFIRMED and ``missing=2`` leaves them LOST; both
+        are eligible for stage two, and a rule that only held for one of them would be a rule
+        that expires exactly when the occlusion has lasted long enough to matter.
+        """
+        far = det(FAR, ROW, w=WIDTH, h=HEIGHT)
+        for offset in range(missing):
+            tracker.update(frame([far], 6 + offset))
+        published = tracker.update(
+            frame(
+                [
+                    det(CLOSE, ROW, LOW_SCORE, w=WIDTH, h=HEIGHT),
+                    det(WIDE, ROW, LOW_SCORE, w=WIDTH, h=HEIGHT),
+                    far,
+                ],
+                6 + missing,
+            )
+        )
+        return sorted(track.track_id for track in published)
+
+    @pytest.mark.parametrize(("missing", "state"), [(0, "confirmed"), (2, "lost")])
+    def test_the_only_affordable_low_score_box_is_not_traded_away(
+        self, missing: int, state: str
+    ) -> None:
+        tracker = self.build("mcbyte")
+        left_id, _, far_id = settle(tracker, det(FAR, ROW, w=WIDTH, h=HEIGHT))
+
+        published = self.occluded_frame(tracker, missing=missing)
+
+        assert published == sorted([left_id, far_id]), f"the {state} track lost its only box"
+
+    @pytest.mark.parametrize(
+        ("name", "options"),
+        [("mcbyte", {"lock_clear_matches": False}), ("botsort", {})],
+    )
+    def test_the_baseline_loses_it(self, name: str, options: dict) -> None:
+        """Only the far object survives the frame: the solver spent both low-score boxes on
+        the pair that is cheaper together and above the threshold apart."""
+        tracker = self.build(name, **options)
+        _, _, far_id = settle(tracker, det(FAR, ROW, w=WIDTH, h=HEIGHT))
+
+        assert self.occluded_frame(tracker, missing=0) == [far_id]
+
+
 class TestItDegradesToItsBaselineWithoutMasks:
     """Switched off it *is* BoT-SORT; switched on it takes nothing away."""
 
@@ -143,6 +221,12 @@ class TestOperability:
 
         assert "external" in locking and "locked" in locking
         assert "none" in plain and "not locked" in plain
+
+    def test_a_switch_that_is_not_a_bool_is_refused_rather_than_read_as_true(self) -> None:
+        """``bool("false")`` is ``True``. A config file that quotes the value would otherwise
+        pin the one switch this tracker is measured by permanently on, and say nothing."""
+        with pytest.raises(ConfigurationError, match="lock_clear_matches"):
+            TRACKERS.build("mcbyte", lock_clear_matches="false")
 
     def test_reset_clears_the_pool_and_the_camera_motion_estimate(self) -> None:
         """A reconnect breaks continuity in both. An affine pushed before the drop, applied

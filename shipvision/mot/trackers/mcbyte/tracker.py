@@ -23,6 +23,7 @@ from collections.abc import Callable, Sequence
 
 import numpy as np
 
+from shipvision.errors import ConfigurationError
 from shipvision.mot.association import associate
 from shipvision.mot.registry import TRACKERS
 from shipvision.mot.trackers.botsort.tracker import BotSortTracker
@@ -31,6 +32,20 @@ from shipvision.registry import PYTHON
 from shipvision.types import Detection
 
 __all__ = ["McByteTracker"]
+
+
+def _rebase(
+    solved: tuple[list[tuple[int, int]], list[int], list[int]],
+    rows: Sequence[int],
+    columns: Sequence[int],
+) -> tuple[list[tuple[int, int]], list[int], list[int]]:
+    """Read a solver's answer back out of one reduction, into the indices it was given."""
+    matches, unmatched_rows, unmatched_columns = solved
+    return (
+        [(rows[row], columns[column]) for row, column in matches],
+        [rows[row] for row in unmatched_rows],
+        [columns[column] for column in unmatched_columns],
+    )
 
 
 @TRACKERS.register("mcbyte", backend=PYTHON, aliases=("mcb", "mc_byte"))
@@ -47,8 +62,20 @@ class McByteTracker(BotSortTracker):
     """
 
     def __init__(self, *, lock_clear_matches: bool = True, **botsort: object) -> None:
+        """
+        Raises:
+            ConfigurationError: ``lock_clear_matches`` is not a bool. A YAML file that says
+                ``false`` unquoted parses to one, but the string ``"false"`` does not, and
+                ``bool("false")`` is ``True`` — the switch this class is measured by, silently
+                stuck on.
+        """
         super().__init__(**botsort)
-        self._lock_clear_matches = bool(lock_clear_matches)
+        if not isinstance(lock_clear_matches, bool):
+            raise ConfigurationError(
+                f"lock_clear_matches must be a bool, got {type(lock_clear_matches).__name__} "
+                f"({lock_clear_matches!r})"
+            )
+        self._lock_clear_matches = lock_clear_matches
 
     def _associate(
         self,
@@ -72,18 +99,20 @@ class McByteTracker(BotSortTracker):
 
         cost = build_cost(rows, columns)
         locked = clear_matches(cost, max_cost)
+        if not locked:
+            # Nothing to lock is a real case — 11 of the 50 stage solves over the busy
+            # sequence in the tests — and then BoT-SORT's answer *is* the answer. Reaching
+            # it through `super()` would rebuild the cost matrix, a stage's expensive half.
+            return _rebase(associate(cost, max_cost), rows, columns)
+
         reduced, kept_rows, kept_columns = reduce_problem(cost, locked)
-        matches, unmatched_rows, unmatched_columns = associate(reduced, max_cost)
+        matches, unmatched_rows, unmatched_columns = _rebase(
+            associate(reduced, max_cost), kept_rows, kept_columns
+        )
         return (
-            sorted(
-                [(rows[row], columns[column]) for row, column in locked]
-                + [
-                    (rows[kept_rows[row]], columns[kept_columns[column]])
-                    for row, column in matches
-                ]
-            ),
-            [rows[kept_rows[row]] for row in unmatched_rows],
-            [columns[kept_columns[column]] for column in unmatched_columns],
+            sorted((rows[row], columns[column]) for row, column in locked + matches),
+            [rows[row] for row in unmatched_rows],
+            [columns[column] for column in unmatched_columns],
         )
 
     def describe(self) -> str:

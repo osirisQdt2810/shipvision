@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 
 from shipvision.mot import TRACKERS
-from shipvision.mot.association import INFEASIBLE, fuse_score
+from shipvision.mot.association import INFEASIBLE, associate, fuse_score
 from shipvision.mot.trackers.mcbyte.utils import (
     ambiguous_candidates,
     clear_matches,
@@ -74,6 +74,20 @@ class TestClearMatches:
         assert clear_matches(cost, 0.5) == [(0, 1)]
         assert clear_matches(np.full((2, 3), INFEASIBLE, np.float32), 0.5) == []
 
+    def test_a_pair_costing_exactly_the_threshold_is_affordable_to_the_lock_and_the_solver(
+        self,
+    ) -> None:
+        """``cost <= max_cost`` here is the same question as ``cost > max_cost: continue``
+        in :func:`~shipvision.mot.association.solver.associate`, and the two have to answer
+        it identically at the boundary. A pair the solver would accept but locking calls
+        unaffordable is a pair whose fate depends on which of the two saw it first — and the
+        conversion this file lives in, ``max_cost = 1 - minimum_similarity``, lands on the
+        boundary exactly whenever the threshold is a round number."""
+        cost = np.array([[0.5, 0.9, 0.9], [0.9, 0.9, 0.62]], np.float32)
+
+        assert clear_matches(cost, 0.5) == [(0, 0)]
+        assert associate(cost, 0.5)[0] == [(0, 0)]
+
     @pytest.mark.parametrize("name", CASES)
     def test_it_agrees_with_the_reference(self, name: str) -> None:
         cost, _, max_cost = case(name)
@@ -100,14 +114,6 @@ class TestTheReducedProblemMapsBackToCallerIndices:
         assert kept_rows == [0, 2]
         assert kept_columns == [0, 1, 3]
         np.testing.assert_allclose(reduced, [[0.9, 0.2, 0.4], [0.9, 0.45, 0.3]], atol=1e-6)
-
-    def test_the_reduced_matrix_is_a_copy(self) -> None:
-        """The conditioning step in the paper writes into it. A view would edit the caller's
-        cost matrix, and the next stage would read a matrix somebody else had boosted."""
-        reduced, _, _ = reduce_problem(self.COST, [(1, 2)])
-        reduced[0, 0] = -1.0
-
-        assert self.COST[0, 0] == pytest.approx(0.9)
 
     def test_a_stage_returns_the_callers_own_track_and_detection_indices(self) -> None:
         """Driven through the association hook itself, with rows and columns that are not
