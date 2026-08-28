@@ -1,6 +1,6 @@
 // Where an object meets the ground, in image pixels.
 //
-// Split from the matcher for the reason `shipvision/mtmc/core/spatial/utils.py` gives: it is
+// Split from the matcher for the reason `shipvision/mtmc/matchers/spatial/utils.py` gives: it is
 // pure image geometry — boxes and frame heights in, points out — with no homography, no camera
 // group and no distance in it, which is what lets the one interesting case be checked against
 // hand-computed numbers. Nobody would notice it going wrong otherwise: a foot point a hundred

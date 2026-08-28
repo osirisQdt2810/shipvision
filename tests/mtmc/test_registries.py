@@ -38,7 +38,7 @@ from shipvision.mtmc import (
 )
 from shipvision.registry import PYTHON, Registry
 
-#: Everything ``shipvision.mtmc`` exported before the matchers moved into ``mtmc/core/``.
+#: Everything ``shipvision.mtmc`` exported before the matchers moved into ``mtmc/matchers/``.
 #: Hard-coded rather than read from the package, because reading it from the package is what
 #: a test of a compatibility promise must not do — it would pass whatever the package says
 #: today.

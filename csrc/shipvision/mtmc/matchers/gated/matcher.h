@@ -1,6 +1,6 @@
 // Appearance, vetoed by geometry. The production matcher.
 //
-// The C++ twin of `shipvision/mtmc/core/gated/matcher.py`. Ten lines of logic, and they are the
+// The C++ twin of `shipvision/mtmc/matchers/gated/matcher.py`. Ten lines of logic, and they are the
 // ten lines that make cross-camera tracking work on a real site: take the appearance
 // similarity, and zero it wherever the two tracks project to ground positions further apart
 // than they could possibly be for one object. Appearance decides *which* of several candidates;
@@ -24,9 +24,9 @@
 
 #include <vector>
 
-#include "shipvision/mtmc/core/appearance/matcher.h"
-#include "shipvision/mtmc/core/spatial/matcher.h"
 #include "shipvision/mtmc/frames.h"
+#include "shipvision/mtmc/matchers/appearance/matcher.h"
+#include "shipvision/mtmc/matchers/spatial/matcher.h"
 
 namespace shipvision::mtmc {
 

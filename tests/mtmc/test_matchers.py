@@ -17,7 +17,7 @@ from shipvision.mtmc import (
     SpatialMatcher,
     foot_points,
 )
-from shipvision.mtmc.core.gated import veto
+from shipvision.mtmc.matchers.gated import veto
 from tests.mtmc.conftest import (
     FRAME_HEIGHT,
     identity_homography,

@@ -1,12 +1,12 @@
-#include "shipvision/mtmc/core/spatial/matcher.h"
+#include "shipvision/mtmc/matchers/spatial/matcher.h"
 
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 
-#include "shipvision/mtmc/core/spatial/utils.h"
 #include "shipvision/mtmc/matcher.h"
+#include "shipvision/mtmc/matchers/spatial/utils.h"
 
 namespace shipvision::mtmc {
 

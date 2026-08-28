@@ -14,9 +14,9 @@ a config string.
 
 from __future__ import annotations
 
-from shipvision.mtmc.core.appearance import AppearanceMatcher, stack_embeddings
-from shipvision.mtmc.core.gated import GatedMatcher, veto
-from shipvision.mtmc.core.spatial import SpatialMatcher, foot_points
+from shipvision.mtmc.matchers.appearance import AppearanceMatcher, stack_embeddings
+from shipvision.mtmc.matchers.gated import GatedMatcher, veto
+from shipvision.mtmc.matchers.spatial import SpatialMatcher, foot_points
 
 __all__ = [
     "AppearanceMatcher",

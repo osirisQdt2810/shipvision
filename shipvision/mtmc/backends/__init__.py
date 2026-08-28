@@ -6,7 +6,7 @@ decision that belongs in :mod:`shipvision.mtmc`, not an invisible side effect of
 directory.
 
 The three matchers themselves — appearance, spatial, and appearance gated by geometry — are
-algorithms and live one package each under :mod:`shipvision.mtmc.core`. What lives here is what
+algorithms and live one package each under :mod:`shipvision.mtmc.matchers`. What lives here is what
 *runs* them.
 
 :mod:`~shipvision.mtmc.backends.native`

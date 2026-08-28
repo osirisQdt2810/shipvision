@@ -28,10 +28,10 @@ from collections.abc import Sequence
 import numpy as np
 
 from shipvision.errors import BackendUnavailableError
-from shipvision.mtmc.core.appearance import AppearanceMatcher
-from shipvision.mtmc.core.gated import GatedMatcher
-from shipvision.mtmc.core.spatial import SpatialMatcher
 from shipvision.mtmc.frames import TrackObservation
+from shipvision.mtmc.matchers.appearance import AppearanceMatcher
+from shipvision.mtmc.matchers.gated import GatedMatcher
+from shipvision.mtmc.matchers.spatial import SpatialMatcher
 from shipvision.mtmc.registry import MTMC_MATCHERS
 from shipvision.mtmc.topology import GroundPlane
 from shipvision.registry import NATIVE
@@ -127,8 +127,8 @@ class NativeAppearanceMatcher(_NativeMatcherMixin, AppearanceMatcher):
         super().__init__(appearance_threshold=appearance_threshold)
 
     def similarities(self, observations: Sequence[TrackObservation]) -> np.ndarray:
-        """See :meth:`~shipvision.mtmc.core.appearance.matcher.AppearanceMatcher.similarities`."""
-        from shipvision.mtmc.core.appearance.utils import stack_embeddings
+        """See :meth:`~shipvision.mtmc.matchers.appearance.matcher.AppearanceMatcher.similarities`."""
+        from shipvision.mtmc.matchers.appearance.utils import stack_embeddings
         from shipvision.reid.distance import cosine_similarity
 
         features = stack_embeddings(observations)
@@ -177,7 +177,7 @@ class NativeSpatialMatcher(_NativeMatcherMixin, SpatialMatcher):
         )
 
     def ground_distances(self, observations: Sequence[TrackObservation]) -> np.ndarray:
-        """See :meth:`~shipvision.mtmc.core.spatial.matcher.SpatialMatcher.ground_distances`."""
+        """See :meth:`~shipvision.mtmc.matchers.spatial.matcher.SpatialMatcher.ground_distances`."""
         points, known = self.ground_positions(observations)
         if len(observations) == 0:
             return np.zeros((0, 0), dtype=np.float32)
@@ -205,7 +205,7 @@ class NativeSpatialMatcher(_NativeMatcherMixin, SpatialMatcher):
         )
 
     def gate(self, observations: Sequence[TrackObservation]) -> np.ndarray:
-        """See :meth:`~shipvision.mtmc.core.spatial.matcher.SpatialMatcher.gate`."""
+        """See :meth:`~shipvision.mtmc.matchers.spatial.matcher.SpatialMatcher.gate`."""
         if len(observations) == 0:
             return np.zeros((0, 0), dtype=bool)
         ground = self.ground_distances(observations)
@@ -259,7 +259,7 @@ class NativeGatedMatcher(_NativeMatcherMixin, GatedMatcher):
         )
 
     def similarities(self, observations: Sequence[TrackObservation]) -> np.ndarray:
-        """See :meth:`~shipvision.mtmc.core.gated.matcher.GatedMatcher.similarities`."""
+        """See :meth:`~shipvision.mtmc.matchers.gated.matcher.GatedMatcher.similarities`."""
         similarity = self.appearance.similarities(observations)
         if similarity.size == 0:
             return similarity

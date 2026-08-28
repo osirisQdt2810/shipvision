@@ -24,7 +24,7 @@ The pieces, each replaceable by name from config:
 * :data:`~shipvision.mtmc.registry.MTMC_MATCHERS` — tracks to an ``(n, n)`` distance matrix.
   ``appearance`` (cosine, thresholded), ``spatial`` (ground-plane separation), ``gated``
   (appearance vetoed by geometry — the production one). One package each under
-  :mod:`shipvision.mtmc.core`, so a fourth strategy is a fourth directory and a decorator.
+  :mod:`shipvision.mtmc.matchers`, so a fourth strategy is a fourth directory and a decorator.
   All three also exist compiled, in :mod:`shipvision.mtmc.backends.native`, registered under
   the same names — ``MTMC_MATCHERS.build("gated")`` takes the fastest one this machine can
   build and ``backend="python"`` pins the reference the compiled one is checked against.
@@ -57,7 +57,7 @@ eviction runs on every instant, including empty ones.
 
 The names that end in ``MatrixBuilder``, plus ``MATRIX_BUILDERS`` and ``CLUSTERERS``, are
 compatibility shims for the spelling this package used before the matchers moved into
-:mod:`shipvision.mtmc.core`; see :mod:`shipvision.mtmc.matrix`.
+:mod:`shipvision.mtmc.matchers`; see :mod:`shipvision.mtmc.matrix`.
 """
 
 from __future__ import annotations
@@ -70,10 +70,15 @@ from shipvision.mtmc.backends.native import (
 )
 from shipvision.mtmc.base import NEVER_MERGE, BaseMatcher, BaseMTMCTracker
 from shipvision.mtmc.clustering import AgglomerativeClusterer, BaseClusterer
-from shipvision.mtmc.core import AppearanceMatcher, GatedMatcher, SpatialMatcher, foot_points
 from shipvision.mtmc.frames import CameraTracks, FrameTrackCluster, TrackKey, TrackObservation
 from shipvision.mtmc.gating import ObservationGate
 from shipvision.mtmc.identity import GlobalIdAssigner
+from shipvision.mtmc.matchers import (
+    AppearanceMatcher,
+    GatedMatcher,
+    SpatialMatcher,
+    foot_points,
+)
 from shipvision.mtmc.matrix import (
     AppearanceMatrixBuilder,
     BaseMatrixBuilder,
