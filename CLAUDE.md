@@ -18,10 +18,25 @@ objects per frame → **~15 000 crops/s**, on 16 GPUs. At that sizing the box is
 detection is ~63 fps/GPU. The bottleneck is **load balance** and **end-to-end latency**, not
 raw throughput — and per-frame Python overhead, which at 1000 fps is the whole budget.
 
-## The one rule that shapes everything: every algorithm exists at least twice
+## The one rule that shapes everything: the numpy backend is the floor
 
-A compiled backend (`native`, C++/CUDA/HIP through `shipvision._C`) for production, and a
-readable `python` backend in numpy. Both register under the same name in the same registry.
+Every algorithm has a readable `python` backend in numpy. An algorithm that has been made
+fast also has a compiled one (`native`, C++/CUDA/HIP through `shipvision._C`) registered
+under the same name in the same registry — which is the ordinary case, and is what "Adding
+an algorithm" step 6 means by *if* you also add a `native` backend.
+
+The asymmetry is deliberate: numpy is what makes a compiled twin checkable and is what runs
+where there is no build, so it cannot be the optional half. Landing an algorithm in numpy
+first and compiling it when the frame budget asks is the intended order, not a shortcut —
+and the gap is recorded rather than assumed, below.
+
+**Outstanding compiled twins.** `mcbyte` (added Aug 2026) is `python`-only: it is BoT-SORT
+plus a pre-assignment lock, so the C++ work is one predicate over the cost matrix inside the
+existing `BotSortTracker` association loop, and it joins `tests/mot/backends/test_parity.py`
+by construction the day it registers. It is the only entry in `TRACKERS` without a twin.
+`CAMERA_MOTION` and the MTMC clusterers are `python`-only and are *not* gaps: they are thin
+wrappers over OpenCV and scipy, which are compiled already — the ponytail principle, not a
+missing port.
 
 This is not redundancy:
 - **A fused kernel nobody can compare against is a fused kernel nobody can trust.** The

@@ -15,8 +15,10 @@ that code arrives under, and — as Apache-2.0 §4(b) requires — what was chan
 - **Lands in:** `shipvision/mot/trackers/mcbyte/`, and the fixture generator
   `tests/mot/trackers/data/gen_mcbyte_golden.py`
 
-A copy of the Apache License 2.0 is at http://www.apache.org/licenses/LICENSE-2.0. Every file
-derived from that source carries a header naming the upstream path and commit.
+A verbatim copy of the Apache License 2.0 is vendored at `LICENSES/Apache-2.0.txt`, because
+§4(a) asks that recipients *receive* the License rather than a link to it — a URL is not a copy,
+and an air-gapped deployment is the case that makes the difference concrete. Every file derived
+from that source carries a header naming the upstream path and commit.
 
 ### Changes made
 

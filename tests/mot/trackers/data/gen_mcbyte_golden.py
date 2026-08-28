@@ -1,20 +1,30 @@
+# Runs roboflow/trackers (Apache-2.0), src/trackers/core/mcbyte/mask_association.py and
+# src/trackers/core/masks/base.py, commit ced34f04886da91dc6bec3dfe02f0a0427231ce8. Changed:
+# no line of it is copied — the two modules are imported by path and their answers dumped.
 """Generate golden traces for shipvision's McByte port, from the REFERENCE implementation.
 
 Runs roboflow/trackers' own `mask_association` (Apache-2.0) over hand-built cases and dumps
 inputs + outputs to JSON. The port's tests convert to cost space on the way in:
 cost = 1 - similarity; max_cost = 1 - minimum_similarity; boosts subtract where the
 reference adds. Run once, BEFORE the port exists; never regenerate from the port.
+
+Point ``ROBOFLOW_TRACKERS_SRC`` at the checkout's ``src/`` to re-derive the oracle elsewhere.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import date
 from pathlib import Path
 
-REF_SRC = Path("/home/dungha15/workspaces/shipinfer/references/roboflow-trackers/src")
+#: The reference checkout's ``src/``, overridable so the oracle can be re-derived by somebody
+#: whose reference tree is not where this one's was. The default is the path it was first
+#: dumped from, kept because it also documents which tree the committed JSON came out of.
+DEFAULT_REF_SRC = "/home/dungha15/workspaces/shipinfer/references/roboflow-trackers/src"
+REF_SRC = Path(os.environ.get("ROBOFLOW_TRACKERS_SRC", DEFAULT_REF_SRC))
 
 # Load the two needed modules by path: the package __init__ drags rich/cv2/supervision,
 # but masks/base.py and mcbyte/mask_association.py need only numpy.
