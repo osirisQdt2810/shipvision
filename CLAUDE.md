@@ -89,7 +89,7 @@ shipvision/            the Python package, at the repository root
 ├── imgproc/           @IMGPROC   letterbox, crop, colour, normalise, NMS
 ├── detection/         @DETECTORS yolo26 (tensorrt / torch), postprocess
 ├── reid/              @EXTRACTORS @GALLERIES @AGGREGATORS + metrics, re-ranking
-├── mot/               @TRACKERS  sort, bytetrack, botsort, ocsort, deepsortv2 — one package per algorithm
+├── mot/               @TRACKERS  sort, bytetrack, botsort, ocsort, mcbyte, deepsortv2 — one per algorithm
 ├── mtmc/              @MTMC      matrix builders, clustering, topology, global id
 ├── tune/              Optuna search spaces + objectives
 └── eval/              HOTA/MOTA/IDF1 for MOT and MTMC; CMC/mAP for re-ID
@@ -125,6 +125,11 @@ OCSort, StrongSORT and DeepSort, plus `motion/cmc/` and the Kalman adapters.
 is MIT; AGPL propagates even to network use. Every tracker here is written from the
 published papers or ported from the internal C++ (`gitea-generic-multi-object-tracking-cpp`,
 `mtmc-tracker`), which is ours.
+
+One permissive exception exists, and it sets the pattern for any other: `mcbyte` is ported
+from roboflow/trackers under Apache-2.0. That licence allows it and §4 asks two things back —
+retain the notice, state the changes — so every ported file carries a three-line header naming
+the upstream path and commit, and `THIRD_PARTY_NOTICES.md` carries the notice and the list.
 
 ## Testing
 
