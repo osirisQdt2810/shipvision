@@ -266,6 +266,7 @@ class TestTheRegistry:
             "bytetrack",
             "ocsort",
             "botsort",
+            "mcbyte",
             "deepsortv2",
         } == set(NAMES)
         for name in NAMES:
@@ -275,7 +276,12 @@ class TestTheRegistry:
             assert repr(tracker)
 
     def test_aliases_resolve_to_the_same_class(self) -> None:
-        for alias, name in (("byte", "bytetrack"), ("oc", "ocsort"), ("dsv2", "deepsortv2")):
+        for alias, name in (
+            ("byte", "bytetrack"),
+            ("oc", "ocsort"),
+            ("dsv2", "deepsortv2"),
+            ("mcb", "mcbyte"),
+        ):
             assert TRACKERS.get(alias) is TRACKERS.get(name)
 
     def test_an_unknown_tracker_names_the_alternatives(self) -> None:
@@ -293,6 +299,8 @@ class TestTheRegistry:
             TRACKERS.build("botsort", appearance_gate=0.0)
         with pytest.raises(ConfigurationError):
             TRACKERS.build("deepsortv2", cascade_stride=0)
+        with pytest.raises(ConfigurationError):
+            TRACKERS.build("mcbyte", track_threshold=0.1, low_threshold=0.5)
         with pytest.raises(ConfigurationError):
             TRACKERS.build("sort", max_age=0)
 

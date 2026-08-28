@@ -22,7 +22,7 @@ from shipvision.tune.spaces import (
     space_for,
 )
 
-TRACKER_NAMES = ["sort", "bytetrack", "ocsort", "botsort", "deepsortv2"]
+TRACKER_NAMES = ["sort", "bytetrack", "ocsort", "botsort", "mcbyte", "deepsortv2"]
 
 
 class TestEveryDeclaredSpaceNamesRealParameters:
