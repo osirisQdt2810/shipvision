@@ -118,7 +118,9 @@ class TestClearMatchLocking:
     def test_the_baseline_loses_it(self, name: str, options: dict) -> None:
         """Asserted, not assumed. A comparison whose baseline is never shown to fail is a
         comparison that would still read as a success if the feature did nothing."""
-        tracker = TRACKERS.build(name, min_hits=2, match_threshold=0.5, **options)
+        tracker = TRACKERS.build(
+            name, backend="python", min_hits=2, match_threshold=0.5, **options
+        )
         settle(tracker)
 
         assert stolen_frame(tracker) == []
@@ -242,12 +244,20 @@ class TestLockingOnTheSecondAssociationStage:
 
 
 class TestItDegradesToItsBaselineWithoutMasks:
-    """Switched off it *is* BoT-SORT; switched on it takes nothing away."""
+    """Switched off it *is* BoT-SORT; switched on it takes nothing away.
+
+    The baseline is pinned to ``backend="python"``, and so is every other comparison in this
+    file. Unpinned, ``build("botsort")`` returns the C++ tracker wherever one is built, and
+    "McByte with locking off is byte-for-byte BoT-SORT" quietly becomes a claim about two
+    languages instead — passing here and failing on a runner with no build, or the reverse.
+    """
 
     def test_with_locking_off_it_is_bot_sort_frame_for_frame(self) -> None:
         frames = busy_sequence()
 
-        reference = drive(TRACKERS.build("botsort", min_hits=2, max_age=10), frames)
+        reference = drive(
+            TRACKERS.build("botsort", backend="python", min_hits=2, max_age=10), frames
+        )
         candidate = drive(
             TRACKERS.build("mcbyte", min_hits=2, max_age=10, lock_clear_matches=False),
             frames,
@@ -270,7 +280,9 @@ class TestItDegradesToItsBaselineWithoutMasks:
             return locked[-1]
 
         monkeypatch.setattr(mcbyte_module, "clear_matches", spy)
-        reference = drive(TRACKERS.build("botsort", min_hits=2, max_age=10), frames)
+        reference = drive(
+            TRACKERS.build("botsort", backend="python", min_hits=2, max_age=10), frames
+        )
         candidate = drive(TRACKERS.build("mcbyte", min_hits=2, max_age=10), frames)
 
         assert sum(len(pairs) for pairs in locked) > 0, "no pair ever locked in this sequence"
