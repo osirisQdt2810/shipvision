@@ -40,7 +40,7 @@ the only honest way to decide between them. Every reference implementation this 
 replaces picks its tracker with a hand-written ``if/elif``, and every one has the same
 consequence: the tracker that shipped first wins by default rather than by measurement.
 
-All five have a ``native`` twin — :mod:`shipvision.mot.backends.native`, over the C++
+Five of the six have a ``native`` twin — :mod:`shipvision.mot.backends.native`, over the C++
 association loops in ``shipvision._C``. Both backends register under the same name, so a config
 that says ``sort`` keeps saying ``sort``, and ``tests/mot/backends/test_parity.py``
 enumerates the pairs *from this registry* and runs each over one sequence, comparing

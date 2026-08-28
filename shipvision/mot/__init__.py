@@ -18,7 +18,7 @@ disagrees with the one the instance has been serving.
         for track in tracker.update(detections):
             publish(track)  # track.tag is detections.tag, always
 
-Five trackers ship, and they are deliberately a chain of one-idea-at-a-time differences so
+Six trackers ship, and they are deliberately a chain of one-idea-at-a-time differences so
 that a claim about any of them can be tested against the one below it:
 
 ``sort``
@@ -32,6 +32,9 @@ that a claim about any of them can be tested against the one below it:
 ``botsort``
     ByteTrack plus camera-motion compensation and minimum-fused appearance — the two things
     that matter once the camera is on a PTZ head or a moving hull.
+``mcbyte``
+    BoT-SORT that locks the pairs nothing else was bidding for before the solve, so the
+    Hungarian total cannot trade an unambiguous match away for two it will then throw out.
 ``deepsortv2``
     The internal C++ tracker's four-stage cascade, with OC-SORT's re-update and recovery and
     a dynamic appearance EMA.
@@ -58,7 +61,7 @@ Layout, and the one reason each directory exists:
 ``backends/``
     What *runs* an algorithm, as opposed to which algorithm it is. ``core/`` is numpy;
     :mod:`shipvision.mot.backends.native` is the C++ association loops in
-    ``shipvision._C``, and all five algorithms have a compiled twin. Both backends register
+    ``shipvision._C``, and five of the six have a compiled twin. Both backends register
     under the same name, so ``TRACKERS.build("sort")`` takes the fastest one this machine can
     actually build and ``TRACKERS.build("sort", backend="python")`` pins the reference.
 ``trackers/``
@@ -115,6 +118,7 @@ from shipvision.mot.trackers.deepsortv2.tracker import (
     DeepSortV2Tracker,
     NativeDeepSortV2Tracker,
 )
+from shipvision.mot.trackers.mcbyte.tracker import McByteTracker
 from shipvision.mot.trackers.ocsort.tracker import NativeOcSortTracker, OcSortTracker
 from shipvision.mot.trackers.sort.tracker import NativeSortTracker, SortTracker
 
@@ -131,6 +135,7 @@ __all__ = [
     "DeepSortV2Tracker",
     "ExternalCameraMotion",
     "KalmanFilter",
+    "McByteTracker",
     "NativeBotSortTracker",
     "NativeByteTrackTracker",
     "NativeDeepSortV2Tracker",

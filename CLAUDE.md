@@ -18,10 +18,25 @@ objects per frame → **~15 000 crops/s**, on 16 GPUs. At that sizing the box is
 detection is ~63 fps/GPU. The bottleneck is **load balance** and **end-to-end latency**, not
 raw throughput — and per-frame Python overhead, which at 1000 fps is the whole budget.
 
-## The one rule that shapes everything: every algorithm exists at least twice
+## The one rule that shapes everything: the numpy backend is the floor
 
-A compiled backend (`native`, C++/CUDA/HIP through `shipvision._C`) for production, and a
-readable `python` backend in numpy. Both register under the same name in the same registry.
+Every algorithm has a readable `python` backend in numpy. An algorithm that has been made
+fast also has a compiled one (`native`, C++/CUDA/HIP through `shipvision._C`) registered
+under the same name in the same registry — which is the ordinary case, and is what "Adding
+an algorithm" step 6 means by *if* you also add a `native` backend.
+
+The asymmetry is deliberate: numpy is what makes a compiled twin checkable and is what runs
+where there is no build, so it cannot be the optional half. Landing an algorithm in numpy
+first and compiling it when the frame budget asks is the intended order, not a shortcut —
+and the gap is recorded rather than assumed, below.
+
+**Outstanding compiled twins.** `mcbyte` (added Aug 2026) is `python`-only: it is BoT-SORT
+plus a pre-assignment lock, so the C++ work is one predicate over the cost matrix inside the
+existing `BotSortTracker` association loop, and it joins `tests/mot/backends/test_parity.py`
+by construction the day it registers. It is the only entry in `TRACKERS` without a twin.
+`CAMERA_MOTION` and the MTMC clusterers are `python`-only and are *not* gaps: they are thin
+wrappers over OpenCV and scipy, which are compiled already — the ponytail principle, not a
+missing port.
 
 This is not redundancy:
 - **A fused kernel nobody can compare against is a fused kernel nobody can trust.** The
@@ -89,7 +104,7 @@ shipvision/            the Python package, at the repository root
 ├── imgproc/           @IMGPROC   letterbox, crop, colour, normalise, NMS
 ├── detection/         @DETECTORS yolo26 (tensorrt / torch), postprocess
 ├── reid/              @EXTRACTORS @GALLERIES @AGGREGATORS + metrics, re-ranking
-├── mot/               @TRACKERS  sort, bytetrack, botsort, ocsort, deepsortv2 — one package per algorithm
+├── mot/               @TRACKERS  sort, bytetrack, botsort, ocsort, mcbyte, deepsortv2 — one per algorithm
 ├── mtmc/              @MTMC      matrix builders, clustering, topology, global id
 ├── tune/              Optuna search spaces + objectives
 └── eval/              HOTA/MOTA/IDF1 for MOT and MTMC; CMC/mAP for re-ID
@@ -125,6 +140,11 @@ OCSort, StrongSORT and DeepSort, plus `motion/cmc/` and the Kalman adapters.
 is MIT; AGPL propagates even to network use. Every tracker here is written from the
 published papers or ported from the internal C++ (`gitea-generic-multi-object-tracking-cpp`,
 `mtmc-tracker`), which is ours.
+
+One permissive exception exists, and it sets the pattern for any other: `mcbyte` is ported
+from roboflow/trackers under Apache-2.0. That licence allows it and §4 asks two things back —
+retain the notice, state the changes — so every ported file carries a three-line header naming
+the upstream path and commit, and `THIRD_PARTY_NOTICES.md` carries the notice and the list.
 
 ## Testing
 

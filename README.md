@@ -61,7 +61,7 @@ on a machine with no build.
 | `imgproc/` | letterbox, crop, colour conversion, normalisation, NMS — fused into one pass over the pixels |
 | `detection/` | YOLO26 detection and segmentation, TensorRT and torch backends, postprocessing |
 | `reid/` | embedding extractors, bounded galleries, feature aggregation, CMC/mAP, k-reciprocal re-ranking |
-| `mot/` | SORT, ByteTrack, BoT-SORT, OC-SORT, DeepSORTv2 over one shared track pool, one package per algorithm (`tracking/` is a deprecated alias) |
+| `mot/` | SORT, ByteTrack, BoT-SORT, OC-SORT, McByte, DeepSORTv2 over one shared track pool, one package per algorithm (`tracking/` is a deprecated alias) |
 | `mtmc/` | appearance + ground-plane matrix builders, agglomerative clustering, camera topology, global-id assignment with TTL |
 | `tune/` | Optuna search spaces and objectives — a tracker's thresholds are an empirical question |
 | `eval/` | HOTA/MOTA/IDF1 for MOT and MTMC, CMC/mAP for re-ID |
@@ -92,5 +92,10 @@ pytest -m gpu          # real devices
 
 ## Licence
 
-MIT. See `CLAUDE.md` for why no code is taken from the AGPL-licensed boxmot trackers in the
-reference tree.
+MIT, with one exception: the `mcbyte` tracker is ported from
+[roboflow/trackers](https://github.com/roboflow/trackers) under the Apache License 2.0.
+The notice and the list of changes are in `THIRD_PARTY_NOTICES.md`, and every ported file
+carries the upstream path and commit in its header.
+
+No code is taken from the AGPL-licensed boxmot trackers in the reference tree — see
+`CLAUDE.md` for why that boundary matters more than the Apache one.

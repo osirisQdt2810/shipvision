@@ -75,6 +75,7 @@ class TestEachAlgorithmIsItsOwnPackage:
             "botsort",
             "bytetrack",
             "deepsortv2",
+            "mcbyte",
             "ocsort",
             "sort",
         ]
@@ -194,7 +195,7 @@ class TestNoHelperIsCopiedBetweenAlgorithms:
         # plus CMC and appearance, BoostTrack is ByteTrack plus three cost boosts. Any *other*
         # edge means one algorithm is reaching into another's private helpers, which is the
         # copy-by-reference version of duplicating them.
-        allowed = {("botsort", "bytetrack")}
+        allowed = {("botsort", "bytetrack"), ("mcbyte", "botsort")}
         offenders: list[str] = []
         for algorithm in ALGORITHMS:
             for path in sorted((TRACKERS_DIR / algorithm).glob("*.py")):
