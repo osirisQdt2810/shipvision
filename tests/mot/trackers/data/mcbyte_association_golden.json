@@ -1,0 +1,1050 @@
+{
+ "provenance": {
+  "upstream": "roboflow/trackers (Apache-2.0)",
+  "path": "src/trackers/core/mcbyte/mask_association.py",
+  "commit": "ced34f04886da91dc6bec3dfe02f0a0427231ce8",
+  "generated": "2026-08-28",
+  "generator": "shipinfer scratchpad gen_mcbyte_golden.py (committed alongside)",
+  "conversion": "cost = 1 - similarity; max_cost = 1 - minimum_similarity; reference adds fill_ratio where the port subtracts it"
+ },
+ "cases": {
+  "doctest_ambiguous_row_boosted": {
+   "inputs": {
+    "similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ]
+    ],
+    "raw_iou_similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ]
+    ],
+    "tracklet_ids": [
+     10
+    ],
+    "detection_boxes": [
+     [
+      0.0,
+      0.0,
+      5.0,
+      5.0
+     ],
+     [
+      5.0,
+      5.0,
+      10.0,
+      10.0
+     ]
+    ],
+    "mask_spec": {
+     "shape": [
+      1,
+      10,
+      10
+     ],
+     "true_rects": [
+      [
+       0,
+       5,
+       0,
+       5
+      ]
+     ],
+     "tracklet_mask": {
+      "10": 0
+     },
+     "avg_prob": {
+      "10": 0.9
+     }
+    },
+    "minimum_similarity": 0.5,
+    "kwargs": {}
+   },
+   "helpers": {
+    "clear_matches": [],
+    "ambiguous": [
+     [
+      true,
+      true
+     ]
+    ],
+    "isolated": [
+     [
+      false,
+      false
+     ]
+    ],
+    "remaining": [
+     [
+      0
+     ],
+     [
+      0,
+      1
+     ]
+    ]
+   },
+   "result": {
+    "conditioned_similarity": [
+     [
+      1.7000000476837158,
+      0.6000000238418579
+     ]
+    ],
+    "locked_matches": [],
+    "remaining_track_indices": [
+     0
+    ],
+    "remaining_detection_indices": [
+     0,
+     1
+    ]
+   }
+  },
+  "one_by_one_clear_lock": {
+   "inputs": {
+    "similarity": [
+     [
+      0.800000011920929
+     ]
+    ],
+    "raw_iou_similarity": [
+     [
+      0.800000011920929
+     ]
+    ],
+    "tracklet_ids": [
+     1
+    ],
+    "detection_boxes": [
+     [
+      0.0,
+      0.0,
+      4.0,
+      4.0
+     ]
+    ],
+    "mask_spec": null,
+    "minimum_similarity": 0.5,
+    "kwargs": {}
+   },
+   "helpers": {
+    "clear_matches": [
+     [
+      0,
+      0
+     ]
+    ],
+    "ambiguous": [
+     [
+      false
+     ]
+    ],
+    "isolated": [
+     [
+      false
+     ]
+    ],
+    "remaining": [
+     [],
+     []
+    ]
+   },
+   "result": {
+    "conditioned_similarity": [],
+    "locked_matches": [
+     [
+      0,
+      0
+     ]
+    ],
+    "remaining_track_indices": [],
+    "remaining_detection_indices": []
+   }
+  },
+  "all_gated_locks_nothing": {
+   "inputs": {
+    "similarity": [
+     [
+      0.20000000298023224,
+      0.10000000149011612
+     ],
+     [
+      0.05000000074505806,
+      0.30000001192092896
+     ]
+    ],
+    "raw_iou_similarity": [
+     [
+      0.20000000298023224,
+      0.10000000149011612
+     ],
+     [
+      0.05000000074505806,
+      0.30000001192092896
+     ]
+    ],
+    "tracklet_ids": [
+     1,
+     2
+    ],
+    "detection_boxes": [
+     [
+      0.0,
+      0.0,
+      4.0,
+      4.0
+     ],
+     [
+      4.0,
+      4.0,
+      8.0,
+      8.0
+     ]
+    ],
+    "mask_spec": null,
+    "minimum_similarity": 0.5,
+    "kwargs": {}
+   },
+   "helpers": {
+    "clear_matches": [],
+    "ambiguous": [
+     [
+      false,
+      false
+     ],
+     [
+      false,
+      false
+     ]
+    ],
+    "isolated": [
+     [
+      false,
+      false
+     ],
+     [
+      false,
+      false
+     ]
+    ],
+    "remaining": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      1
+     ]
+    ]
+   },
+   "result": {
+    "conditioned_similarity": [
+     [
+      0.20000000298023224,
+      0.10000000149011612
+     ],
+     [
+      0.05000000074505806,
+      0.30000001192092896
+     ]
+    ],
+    "locked_matches": [],
+    "remaining_track_indices": [
+     0,
+     1
+    ],
+    "remaining_detection_indices": [
+     0,
+     1
+    ]
+   }
+  },
+  "ambiguous_column_two_tracks_one_det": {
+   "inputs": {
+    "similarity": [
+     [
+      0.699999988079071
+     ],
+     [
+      0.6000000238418579
+     ]
+    ],
+    "raw_iou_similarity": [
+     [
+      0.699999988079071
+     ],
+     [
+      0.6000000238418579
+     ]
+    ],
+    "tracklet_ids": [
+     1,
+     2
+    ],
+    "detection_boxes": [
+     [
+      0.0,
+      0.0,
+      4.0,
+      4.0
+     ]
+    ],
+    "mask_spec": null,
+    "minimum_similarity": 0.5,
+    "kwargs": {}
+   },
+   "helpers": {
+    "clear_matches": [],
+    "ambiguous": [
+     [
+      true
+     ],
+     [
+      true
+     ]
+    ],
+    "isolated": [
+     [
+      false
+     ],
+     [
+      false
+     ]
+    ],
+    "remaining": [
+     [
+      0,
+      1
+     ],
+     [
+      0
+     ]
+    ]
+   },
+   "result": {
+    "conditioned_similarity": [
+     [
+      0.699999988079071
+     ],
+     [
+      0.6000000238418579
+     ]
+    ],
+    "locked_matches": [],
+    "remaining_track_indices": [
+     0,
+     1
+    ],
+    "remaining_detection_indices": [
+     0
+    ]
+   }
+  },
+  "middle_lock_reduces_3x3": {
+   "inputs": {
+    "similarity": [
+     [
+      0.8999999761581421,
+      0.6000000238418579,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.800000011920929
+     ],
+     [
+      0.550000011920929,
+      0.0,
+      0.30000001192092896
+     ]
+    ],
+    "raw_iou_similarity": [
+     [
+      0.8999999761581421,
+      0.6000000238418579,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.800000011920929
+     ],
+     [
+      0.550000011920929,
+      0.0,
+      0.30000001192092896
+     ]
+    ],
+    "tracklet_ids": [
+     1,
+     2,
+     3
+    ],
+    "detection_boxes": [
+     [
+      0.0,
+      0.0,
+      4.0,
+      4.0
+     ],
+     [
+      4.0,
+      0.0,
+      8.0,
+      4.0
+     ],
+     [
+      0.0,
+      4.0,
+      4.0,
+      8.0
+     ]
+    ],
+    "mask_spec": null,
+    "minimum_similarity": 0.5,
+    "kwargs": {}
+   },
+   "helpers": {
+    "clear_matches": [
+     [
+      1,
+      2
+     ]
+    ],
+    "ambiguous": [
+     [
+      true,
+      true,
+      false
+     ],
+     [
+      false,
+      false,
+      false
+     ],
+     [
+      true,
+      false,
+      false
+     ]
+    ],
+    "isolated": [
+     [
+      false,
+      false,
+      false
+     ],
+     [
+      false,
+      false,
+      false
+     ],
+     [
+      false,
+      false,
+      false
+     ]
+    ],
+    "remaining": [
+     [
+      0,
+      2
+     ],
+     [
+      0,
+      1
+     ]
+    ]
+   },
+   "result": {
+    "conditioned_similarity": [
+     [
+      0.8999999761581421,
+      0.6000000238418579
+     ],
+     [
+      0.550000011920929,
+      0.0
+     ]
+    ],
+    "locked_matches": [
+     [
+      1,
+      2
+     ]
+    ],
+    "remaining_track_indices": [
+     0,
+     2
+    ],
+    "remaining_detection_indices": [
+     0,
+     1
+    ]
+   }
+  },
+  "isolated_below_threshold_flag_off": {
+   "inputs": {
+    "similarity": [
+     [
+      0.30000001192092896
+     ]
+    ],
+    "raw_iou_similarity": [
+     [
+      0.30000001192092896
+     ]
+    ],
+    "tracklet_ids": [
+     10
+    ],
+    "detection_boxes": [
+     [
+      0.0,
+      0.0,
+      5.0,
+      5.0
+     ]
+    ],
+    "mask_spec": {
+     "shape": [
+      1,
+      10,
+      10
+     ],
+     "true_rects": [
+      [
+       0,
+       5,
+       0,
+       5
+      ]
+     ],
+     "tracklet_mask": {
+      "10": 0
+     },
+     "avg_prob": {
+      "10": 0.9
+     }
+    },
+    "minimum_similarity": 0.5,
+    "kwargs": {
+     "enable_isolated_mask_matching": false
+    }
+   },
+   "helpers": {
+    "clear_matches": [],
+    "ambiguous": [
+     [
+      false
+     ]
+    ],
+    "isolated": [
+     [
+      true
+     ]
+    ],
+    "remaining": [
+     [
+      0
+     ],
+     [
+      0
+     ]
+    ]
+   },
+   "result": {
+    "conditioned_similarity": [
+     [
+      0.30000001192092896
+     ]
+    ],
+    "locked_matches": [],
+    "remaining_track_indices": [
+     0
+    ],
+    "remaining_detection_indices": [
+     0
+    ]
+   }
+  },
+  "isolated_below_threshold_flag_on": {
+   "inputs": {
+    "similarity": [
+     [
+      0.30000001192092896
+     ]
+    ],
+    "raw_iou_similarity": [
+     [
+      0.30000001192092896
+     ]
+    ],
+    "tracklet_ids": [
+     10
+    ],
+    "detection_boxes": [
+     [
+      0.0,
+      0.0,
+      5.0,
+      5.0
+     ]
+    ],
+    "mask_spec": {
+     "shape": [
+      1,
+      10,
+      10
+     ],
+     "true_rects": [
+      [
+       0,
+       5,
+       0,
+       5
+      ]
+     ],
+     "tracklet_mask": {
+      "10": 0
+     },
+     "avg_prob": {
+      "10": 0.9
+     }
+    },
+    "minimum_similarity": 0.5,
+    "kwargs": {
+     "enable_isolated_mask_matching": true
+    }
+   },
+   "helpers": {
+    "clear_matches": [],
+    "ambiguous": [
+     [
+      false
+     ]
+    ],
+    "isolated": [
+     [
+      true
+     ]
+    ],
+    "remaining": [
+     [
+      0
+     ],
+     [
+      0
+     ]
+    ]
+   },
+   "result": {
+    "conditioned_similarity": [
+     [
+      1.2999999523162842
+     ]
+    ],
+    "locked_matches": [],
+    "remaining_track_indices": [
+     0
+    ],
+    "remaining_detection_indices": [
+     0
+    ]
+   }
+  },
+  "confidence_below_floor_changes_nothing": {
+   "inputs": {
+    "similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ]
+    ],
+    "raw_iou_similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ]
+    ],
+    "tracklet_ids": [
+     10
+    ],
+    "detection_boxes": [
+     [
+      0.0,
+      0.0,
+      5.0,
+      5.0
+     ],
+     [
+      5.0,
+      5.0,
+      10.0,
+      10.0
+     ]
+    ],
+    "mask_spec": {
+     "shape": [
+      1,
+      10,
+      10
+     ],
+     "true_rects": [
+      [
+       0,
+       5,
+       0,
+       5
+      ]
+     ],
+     "tracklet_mask": {
+      "10": 0
+     },
+     "avg_prob": {
+      "10": 0.5
+     }
+    },
+    "minimum_similarity": 0.5,
+    "kwargs": {}
+   },
+   "helpers": {
+    "clear_matches": [],
+    "ambiguous": [
+     [
+      true,
+      true
+     ]
+    ],
+    "isolated": [
+     [
+      false,
+      false
+     ]
+    ],
+    "remaining": [
+     [
+      0
+     ],
+     [
+      0,
+      1
+     ]
+    ]
+   },
+   "result": {
+    "conditioned_similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ]
+    ],
+    "locked_matches": [],
+    "remaining_track_indices": [
+     0
+    ],
+    "remaining_detection_indices": [
+     0,
+     1
+    ]
+   }
+  },
+  "coverage_below_floor_changes_nothing": {
+   "inputs": {
+    "similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ]
+    ],
+    "raw_iou_similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ]
+    ],
+    "tracklet_ids": [
+     10
+    ],
+    "detection_boxes": [
+     [
+      5.0,
+      0.0,
+      10.0,
+      10.0
+     ],
+     [
+      0.0,
+      0.0,
+      5.0,
+      5.0
+     ]
+    ],
+    "mask_spec": {
+     "shape": [
+      1,
+      10,
+      10
+     ],
+     "true_rects": [
+      [
+       0,
+       10,
+       0,
+       5
+      ]
+     ],
+     "tracklet_mask": {
+      "10": 0
+     },
+     "avg_prob": {
+      "10": 0.9
+     }
+    },
+    "minimum_similarity": 0.5,
+    "kwargs": {}
+   },
+   "helpers": {
+    "clear_matches": [],
+    "ambiguous": [
+     [
+      true,
+      true
+     ]
+    ],
+    "isolated": [
+     [
+      false,
+      false
+     ]
+    ],
+    "remaining": [
+     [
+      0
+     ],
+     [
+      0,
+      1
+     ]
+    ]
+   },
+   "result": {
+    "conditioned_similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ]
+    ],
+    "locked_matches": [],
+    "remaining_track_indices": [
+     0
+    ],
+    "remaining_detection_indices": [
+     0,
+     1
+    ]
+   }
+  },
+  "fill_ratio_below_floor_changes_nothing": {
+   "inputs": {
+    "similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ]
+    ],
+    "raw_iou_similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ]
+    ],
+    "tracklet_ids": [
+     10
+    ],
+    "detection_boxes": [
+     [
+      0.0,
+      0.0,
+      10.0,
+      10.0
+     ],
+     [
+      10.0,
+      10.0,
+      20.0,
+      20.0
+     ]
+    ],
+    "mask_spec": {
+     "shape": [
+      1,
+      20,
+      20
+     ],
+     "true_rects": [
+      [
+       0,
+       2,
+       0,
+       2
+      ]
+     ],
+     "tracklet_mask": {
+      "10": 0
+     },
+     "avg_prob": {
+      "10": 0.9
+     }
+    },
+    "minimum_similarity": 0.5,
+    "kwargs": {}
+   },
+   "helpers": {
+    "clear_matches": [],
+    "ambiguous": [
+     [
+      true,
+      true
+     ]
+    ],
+    "isolated": [
+     [
+      false,
+      false
+     ]
+    ],
+    "remaining": [
+     [
+      0
+     ],
+     [
+      0,
+      1
+     ]
+    ]
+   },
+   "result": {
+    "conditioned_similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ]
+    ],
+    "locked_matches": [],
+    "remaining_track_indices": [
+     0
+    ],
+    "remaining_detection_indices": [
+     0,
+     1
+    ]
+   }
+  },
+  "no_mask_output_is_identity_on_scores": {
+   "inputs": {
+    "similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ],
+     [
+      0.550000011920929,
+      0.800000011920929
+     ]
+    ],
+    "raw_iou_similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ],
+     [
+      0.550000011920929,
+      0.800000011920929
+     ]
+    ],
+    "tracklet_ids": [
+     1,
+     2
+    ],
+    "detection_boxes": [
+     [
+      0.0,
+      0.0,
+      4.0,
+      4.0
+     ],
+     [
+      4.0,
+      4.0,
+      8.0,
+      8.0
+     ]
+    ],
+    "mask_spec": null,
+    "minimum_similarity": 0.5,
+    "kwargs": {}
+   },
+   "helpers": {
+    "clear_matches": [],
+    "ambiguous": [
+     [
+      true,
+      true
+     ],
+     [
+      true,
+      true
+     ]
+    ],
+    "isolated": [
+     [
+      false,
+      false
+     ],
+     [
+      false,
+      false
+     ]
+    ],
+    "remaining": [
+     [
+      0,
+      1
+     ],
+     [
+      0,
+      1
+     ]
+    ]
+   },
+   "result": {
+    "conditioned_similarity": [
+     [
+      0.699999988079071,
+      0.6000000238418579
+     ],
+     [
+      0.550000011920929,
+      0.800000011920929
+     ]
+    ],
+    "locked_matches": [],
+    "remaining_track_indices": [
+     0,
+     1
+    ],
+    "remaining_detection_indices": [
+     0,
+     1
+    ]
+   }
+  }
+ }
+}

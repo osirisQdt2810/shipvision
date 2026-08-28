@@ -37,6 +37,7 @@ PUBLISHED = {
     "ocsort": ("oc", "oc_sort"),
     "botsort": ("bot", "bot_sort"),
     "deepsortv2": ("deepsort2", "dsv2"),
+    "mcbyte": ("mcb", "mc_byte"),
 }
 
 

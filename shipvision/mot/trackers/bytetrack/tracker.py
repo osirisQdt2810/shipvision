@@ -6,6 +6,8 @@ Zhang et al., "ByteTrack: Multi-Object Tracking by Associating Every Detection B
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+
 import numpy as np
 
 from shipvision.errors import ConfigurationError
@@ -96,11 +98,12 @@ class ByteTrackTracker(BaseTracker):
         )
 
         rows = list(range(self.pool_size))
-        matches, unmatched_rows, unmatched_high = associate_subset(
+        matches, unmatched_rows, unmatched_high = self._associate(
             lambda r, c: self._first_cost(r, c, high),
             self._max_cost,
             rows,
             list(range(len(high))),
+            high,
         )
         self._pool.apply_matches(matches, high)
 
@@ -112,11 +115,12 @@ class ByteTrackTracker(BaseTracker):
             for row in unmatched_rows
             if self._pool.tracks[row].state in (TrackState.CONFIRMED, TrackState.LOST)
         ]
-        second_matches, still_unmatched, _ = associate_subset(
+        second_matches, still_unmatched, _ = self._associate(
             lambda r, c: self._second_cost(r, c, low),
             self._second_max_cost,
             eligible,
             list(range(len(low))),
+            low,
         )
         self._pool.apply_matches(second_matches, low)
 
@@ -128,6 +132,26 @@ class ByteTrackTracker(BaseTracker):
         self._pool.spawn(high, unmatched_high)
         self._pool.sweep()
         return self._pool.output()
+
+    def _associate(
+        self,
+        build_cost: Callable[[Sequence[int], Sequence[int]], np.ndarray],
+        max_cost: float,
+        rows: Sequence[int],
+        columns: Sequence[int],
+        detections: Sequence[Detection],
+    ) -> tuple[list[tuple[int, int]], list[int], list[int]]:
+        """How one association stage is solved, so a subclass can change it once for both.
+
+        ByteTrack and BoT-SORT hand the whole sub-problem to
+        :func:`~shipvision.mot.association.solver.associate_subset`. McByte decides part of it
+        first; a hook rather than two overridden stages because the rule applies identically
+        to both, and restating the loop twice to say so would make it a fork.
+
+        ``detections`` are this stage's own, in the caller's column order, for a subclass that
+        needs the boxes rather than only the cost they produced.
+        """
+        return associate_subset(build_cost, max_cost, rows, columns)
 
     def _compensate(self, image: np.ndarray | None) -> None:
         """Warp the predictions into this frame's coordinates. ByteTrack does nothing here.

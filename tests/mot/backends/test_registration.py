@@ -57,6 +57,7 @@ class TestTheRegistryStatesWhatTheLibraryImplements:
             "botsort",
             "bytetrack",
             "deepsortv2",
+            "mcbyte",
             "ocsort",
             "sort",
         ]

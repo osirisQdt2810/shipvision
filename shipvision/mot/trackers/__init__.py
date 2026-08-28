@@ -20,16 +20,17 @@ Each subpackage is the same three files, and the split is the point rather than 
     trackers keep passing their tests and quietly stop being comparable, which defeats the
     only reason five of them exist.
 
-The five are deliberately a chain of one-idea-at-a-time differences, so a claim about any of
+The six are deliberately a chain of one-idea-at-a-time differences, so a claim about any of
 them can be tested against the one below it rather than asserted:
-``sort`` -> ``bytetrack`` -> ``ocsort``, and ``bytetrack`` -> ``botsort``, with ``deepsortv2``
-combining the internal C++ tracker's cascade with OC-SORT's two observation-centric
-corrections.
+``sort`` -> ``bytetrack`` -> ``ocsort``, and ``bytetrack`` -> ``botsort`` -> ``mcbyte``, with
+``deepsortv2`` combining the internal C++ tracker's cascade with OC-SORT's two
+observation-centric corrections.
 """
 
 from shipvision.mot.trackers.botsort import BotSortTracker
 from shipvision.mot.trackers.bytetrack import ByteTrackTracker
 from shipvision.mot.trackers.deepsortv2 import DeepSortV2Tracker
+from shipvision.mot.trackers.mcbyte import McByteTracker
 from shipvision.mot.trackers.ocsort import OcSortTracker
 from shipvision.mot.trackers.sort import SortTracker
 
@@ -37,6 +38,7 @@ __all__ = [
     "BotSortTracker",
     "ByteTrackTracker",
     "DeepSortV2Tracker",
+    "McByteTracker",
     "OcSortTracker",
     "SortTracker",
 ]

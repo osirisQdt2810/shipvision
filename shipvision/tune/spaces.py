@@ -324,6 +324,11 @@ APPEARANCE_PARAMETERS: dict[str, tuple[ParameterRange, ...]] = {
         FloatRange("appearance_gate", 0.05, 0.4),
         FloatRange("appearance_weight", 0.3, 1.0),
     ),
+    "mcbyte": (
+        FloatRange("appearance_gate", 0.1, 0.6),
+        FloatRange("appearance_weight", 0.2, 1.0),
+        FloatRange("embedding_momentum", 0.7, 0.99),
+    ),
 }
 
 
@@ -411,6 +416,29 @@ def _botsort() -> SearchSpace:
     )
 
 
+def _mcbyte() -> SearchSpace:
+    """McByte. BoT-SORT's geometry, plus the one switch the paper is about.
+
+    ``lock_clear_matches`` is categorical and both values are reachable on purpose: a study
+    that could only vary *how much* locking is applied could not answer whether it helps at
+    all, and the answer on a given site's footage is the reason this tracker is selectable by
+    name. The appearance and ``cmc`` parameters are excluded for the reasons in
+    :func:`_botsort` — they cannot be measured on a box-only benchmark.
+    """
+    return SearchSpace(
+        "mcbyte",
+        (
+            FloatRange("track_threshold", 0.3, 0.8),
+            FloatRange("low_threshold", 0.02, 0.2),
+            FloatRange("match_threshold", 0.1, 0.5),
+            FloatRange("second_match_threshold", 0.2, 0.7),
+            IntRange("max_age", 5, 60),
+            IntRange("min_hits", 1, 5),
+            CategoricalChoice("lock_clear_matches", (True, False)),
+        ),
+    )
+
+
 def _deepsortv2() -> SearchSpace:
     """DeepSORT v2's four-stage cascade, on the stage costs that geometry can move.
 
@@ -447,6 +475,7 @@ _BUILDERS = {
     "bytetrack": _bytetrack,
     "ocsort": _ocsort,
     "botsort": _botsort,
+    "mcbyte": _mcbyte,
     "deepsortv2": _deepsortv2,
 }
 
