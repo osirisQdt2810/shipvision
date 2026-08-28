@@ -55,9 +55,9 @@ from shipvision.registry import NATIVE
 __all__ = ["NativeImageOps", "native_available"]
 
 try:  # pragma: no cover - depends on whether the extension was built, not on a branch
-    from shipvision import _C
+    from shipvision._native import load_extension
 
-    _IMPORT_ERROR: str | None = None
+    _C, _IMPORT_ERROR = load_extension()
 except ImportError as exc:  # pragma: no cover
     _C = None  # type: ignore[assignment]
     _IMPORT_ERROR = str(exc)
