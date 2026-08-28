@@ -1,16 +1,18 @@
 """McByte, against the BoT-SORT it is a diff of.
 
-Two claims, and the second is what makes the first worth having. **It gains something**: on a
-frame where the Hungarian total prefers to trade an unambiguous pair away for two it will then
-throw out, McByte keeps the pair — and the baseline is asserted to lose it, so the comparison
-is an algorithm rather than a handicap. **It costs nothing**: with the locking switched off it
-is byte-for-byte BoT-SORT, and with it on it loses none of BoT-SORT's associations over a busy
-forty-frame sequence.
+Two claims, and the second makes the first worth having. **It gains something**: where the
+Hungarian total would trade an unambiguous pair away for two it then throws out, McByte keeps
+it — on either association stage, and across a sequence that ends as one identity rather than
+three. Every comparison asserts the baseline fails, so it measures an algorithm and not a
+handicap. **It costs nothing**: locking off is byte-for-byte BoT-SORT, and locking on loses
+none of BoT-SORT's associations over a busy forty-frame sequence.
 
-End-to-end numeric parity with the upstream port is out of scope and is not attempted; the
-filter state is ``(cx, cy, aspect, height)`` here against the reference's ``(xc, yc, w, h)``,
-and the lifecycles differ. The reference's *decisions* are pinned in
-``test_mcbyte_association.py`` instead, on the pure functions where they are decidable.
+Those gain scenarios are constructed, and say so: locking fires 125 times over that busy
+sequence and changes nothing, so the frames it does change are built rather than found.
+
+End-to-end numeric parity with the upstream port is not attempted: the filter state and the
+lifecycles differ. The reference's *decisions* are pinned in ``test_mcbyte_association.py``
+instead, on the pure functions where they are decidable.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from shipvision.mot import TRACKERS
 from shipvision.mot.motion import IDENTITY_AFFINE
 from shipvision.types import Detection
 from tests.mot.backends.conftest import assert_same_tracking
-from tests.mot.conftest import det, drive, frame
+from tests.mot.conftest import all_ids, det, drive, frame
 
 #: A stolen-pair frame, built backwards from the cost matrix that produces the failure. Two
 #: objects settle at ``LEFT`` and ``RIGHT``; one detection lands close to the left one (IoU
@@ -57,6 +59,25 @@ def stolen_frame(tracker: object) -> list:
     return tracker.update(
         frame([det(CLOSE, ROW, w=WIDTH, h=HEIGHT), det(WIDE, ROW, w=WIDTH, h=HEIGHT)], 6)
     )
+
+
+#: How long the detector is confused, and how long a track remembers. The stretch outlasts
+#: the memory, which is what turns a starved track into an identity switch — six frames is
+#: 0.3 s at the twenty-per-second this library is sized for.
+SETTLED, SPLIT, RECOVERED, SHORT_MEMORY = 6, 6, 6, 5
+
+
+def split_detection_sequence() -> list[list[Detection]]:
+    """Eighteen frames: two people settle, the detector splits over one of them, it recovers.
+
+    The middle stretch is a split detection, which is an ordinary detector failure and not a
+    matrix built backwards: one box lands nearly on the left-hand person and one wide of them,
+    and the right-hand person is missed entirely. The near box is the only affordable
+    candidate the left-hand track has, and it is exactly the one the solver trades away.
+    """
+    settled = settled_scene()
+    split = [det(CLOSE, ROW, w=WIDTH, h=HEIGHT), det(WIDE, ROW, w=WIDTH, h=HEIGHT)]
+    return [settled] * SETTLED + [split] * SPLIT + [settled] * RECOVERED
 
 
 def busy_sequence() -> list[list]:
@@ -101,6 +122,54 @@ class TestClearMatchLocking:
         settle(tracker)
 
         assert stolen_frame(tracker) == []
+
+
+class TestTheGainSurvivesAWholeSequence:
+    """The same failure over eighteen frames, where the cost of it is an identity switch.
+
+    One frame of a starved track is recoverable; a stretch of them longer than ``max_age``
+    is not, and the person walks out of the tracker under a different number. ``max_age``
+    decides only how long the loss takes to surface — the trade is what caused it, which is
+    why turning locking off reproduces the baseline exactly.
+    """
+
+    def build(self, name: str, **options: object) -> object:
+        return TRACKERS.build(
+            name,
+            backend="python",
+            min_hits=2,
+            max_age=SHORT_MEMORY,
+            match_threshold=0.5,
+            **options,
+        )
+
+    def left_hand_id(self, published: list) -> int:
+        return min(published[SETTLED - 1], key=lambda track: float(track.box[0])).track_id
+
+    def test_the_left_hand_person_keeps_one_identity_from_end_to_end(self) -> None:
+        published = drive(self.build("mcbyte"), split_detection_sequence())
+        left_id = self.left_hand_id(published)
+
+        holding = [step for step in published[SETTLED - 1 :] if left_id in all_ids([step])]
+
+        assert len(holding) == len(published) - SETTLED + 1, "the identity was dropped"
+        assert len(all_ids(published)) == 4, "two people, one spurious box, one re-birth"
+
+    @pytest.mark.parametrize(
+        ("name", "options"),
+        [("mcbyte", {"lock_clear_matches": False}), ("botsort", {})],
+    )
+    def test_the_baseline_publishes_that_person_under_three_identities(
+        self, name: str, options: dict
+    ) -> None:
+        """And publishes nothing at all on the frame the trade happens, with two people
+        standing in front of the camera — the starved pair is both of them at once."""
+        published = drive(self.build(name, **options), split_detection_sequence())
+        left_id = self.left_hand_id(published)
+
+        assert published[SETTLED] == []
+        assert left_id not in all_ids(published[SETTLED:])
+        assert len(all_ids(published)) == 6
 
 
 class TestLockingOnTheSecondAssociationStage:
