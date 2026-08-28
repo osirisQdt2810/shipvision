@@ -7,12 +7,12 @@
 #include <vector>
 
 #include "shipvision/mtmc/clustering/agglomerative.h"
+#include "shipvision/mtmc/frames.h"
+#include "shipvision/mtmc/matcher.h"
 #include "shipvision/mtmc/matchers/appearance/matcher.h"
 #include "shipvision/mtmc/matchers/gated/matcher.h"
 #include "shipvision/mtmc/matchers/spatial/matcher.h"
 #include "shipvision/mtmc/matchers/spatial/utils.h"
-#include "shipvision/mtmc/frames.h"
-#include "shipvision/mtmc/matcher.h"
 #include "shipvision/mtmc/topology/homography.h"
 
 namespace py = pybind11;

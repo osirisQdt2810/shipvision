@@ -19,8 +19,8 @@ import numpy as np
 
 from shipvision.errors import ConfigurationError
 from shipvision.mtmc.base import BaseMatcher
-from shipvision.mtmc.core.appearance.utils import stack_embeddings
 from shipvision.mtmc.frames import TrackObservation
+from shipvision.mtmc.matchers.appearance.utils import stack_embeddings
 from shipvision.mtmc.registry import MTMC_MATCHERS
 from shipvision.registry import PYTHON
 from shipvision.reid.distance import cosine_similarity
@@ -60,7 +60,7 @@ class AppearanceMatcher(BaseMatcher):
         Deliberately *not* camera-masked: the mask belongs to exactly one place
         (:meth:`~shipvision.mtmc.base.BaseMatcher.to_distance`), and having it applied twice
         is how it ends up applied zero times after a refactor. Composed by
-        :class:`~shipvision.mtmc.core.gated.matcher.GatedMatcher`, which needs the raw
+        :class:`~shipvision.mtmc.matchers.gated.matcher.GatedMatcher`, which needs the raw
         appearance evidence before deciding whether geometry vetoes it.
         """
         features = stack_embeddings(observations)

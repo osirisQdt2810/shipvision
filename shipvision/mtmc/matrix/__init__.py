@@ -1,7 +1,7 @@
 """Compatibility shim: the names ``shipvision.mtmc.matrix`` exported before the repackaging.
 
 Nothing new lives here and nothing here is the definition of anything — every name below is
-the object that :mod:`shipvision.mtmc.core` and :mod:`shipvision.mtmc.base` define, under the
+the object that :mod:`shipvision.mtmc.matchers` and :mod:`shipvision.mtmc.base` define, under the
 spelling it had when the matchers were four modules in a ``matrix/`` package. Aliases rather
 than subclasses, so ``isinstance`` and ``is`` comparisons cannot start disagreeing depending
 on which name a caller reached for.
@@ -25,13 +25,13 @@ What this shim does **not** restore are the leaf module paths — ``mtmc.matrix.
 ``mtmc.matrix.gated`` and their siblings. Those were the implementation files of a package,
 not its interface; nothing in this repository or in ShipInfer imported one, and keeping five
 stub modules alive to preserve paths nobody used would be a larger lie than the move itself.
-Import from :mod:`shipvision.mtmc` or :mod:`shipvision.mtmc.core` instead.
+Import from :mod:`shipvision.mtmc` or :mod:`shipvision.mtmc.matchers` instead.
 """
 
 from __future__ import annotations
 
 from shipvision.mtmc.base import NEVER_MERGE, BaseMatcher
-from shipvision.mtmc.core import (
+from shipvision.mtmc.matchers import (
     AppearanceMatcher,
     GatedMatcher,
     SpatialMatcher,

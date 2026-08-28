@@ -24,9 +24,9 @@
 
 #include <vector>
 
+#include "shipvision/mtmc/frames.h"
 #include "shipvision/mtmc/matchers/appearance/matcher.h"
 #include "shipvision/mtmc/matchers/spatial/matcher.h"
-#include "shipvision/mtmc/frames.h"
 
 namespace shipvision::mtmc {
 

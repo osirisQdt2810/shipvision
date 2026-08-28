@@ -1,6 +1,6 @@
 """Compatibility shim: ``shipvision.mtmc.matrix.appearance`` before the repackaging.
 
-The definitions live in :mod:`shipvision.mtmc.core` and :mod:`shipvision.mtmc.base` now. This
+The definitions live in :mod:`shipvision.mtmc.matchers` and :mod:`shipvision.mtmc.base` now. This
 module re-exports them under the module path they had, because a package-level re-export is
 not the same promise as a module path — ``from shipvision.mtmc.matrix import
 AppearanceMatrixBuilder`` kept working after the move while ``import

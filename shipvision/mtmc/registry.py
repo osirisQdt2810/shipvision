@@ -17,7 +17,7 @@ Three families, because there are three independent choices a site makes:
   matrix alone.
 
 Adding a cross-camera association strategy is therefore a new package under
-:mod:`shipvision.mtmc.core` and a ``@MTMC_MATCHERS.register`` decorator — never an edit to a
+:mod:`shipvision.mtmc.matchers` and a ``@MTMC_MATCHERS.register`` decorator — never an edit to a
 branch in the tracker.
 """
 

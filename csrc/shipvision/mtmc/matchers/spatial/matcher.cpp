@@ -5,8 +5,8 @@
 #include <string>
 #include <unordered_map>
 
-#include "shipvision/mtmc/matchers/spatial/utils.h"
 #include "shipvision/mtmc/matcher.h"
+#include "shipvision/mtmc/matchers/spatial/utils.h"
 
 namespace shipvision::mtmc {
 
