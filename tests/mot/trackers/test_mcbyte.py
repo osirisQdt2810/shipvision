@@ -300,7 +300,9 @@ class TestOperability:
         locking = TRACKERS.build("mcbyte", cmc="external").describe()
         plain = TRACKERS.build("mcbyte", lock_clear_matches=False).describe()
 
-        assert "external" in locking and "locked" in locking
+        # "not locked" contains "locked", so the positive half has to exclude the negative
+        # one or a describe() that always said "not locked" would satisfy both assertions.
+        assert "external" in locking and "locked" in locking and "not locked" not in locking
         assert "none" in plain and "not locked" in plain
 
     def test_a_switch_that_is_not_a_bool_is_refused_rather_than_read_as_true(self) -> None:
