@@ -99,6 +99,35 @@ class TestVendorApiBoundary:
         assert not strip_c_comments("// cudaErrorMisalignedAddress is sticky").strip()
 
 
+class TestTheCompiledExtensionHasOneImporter:
+    """`_native.py` is the only module that may import `_C`, and that has to stay true.
+
+    The guard it carries — refusing an extension built in another checkout — is worth exactly
+    as much as its coverage of the import sites. A fourth backend added later with its own
+    `from shipvision import _C` would silently opt out of it, and nothing would say so, which
+    is the same shape of silent failure the guard exists to end.
+    """
+
+    def test_only_native_py_imports_the_extension(self) -> None:
+        offenders: list[str] = []
+        for path in sorted(PACKAGE.rglob("*.py")):
+            if path.name == "_native.py":
+                continue
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module == "shipvision":
+                    if any(alias.name == "_C" for alias in node.names):
+                        offenders.append(f"{path.relative_to(REPO)}:{node.lineno}")
+                elif isinstance(node, ast.Import):
+                    if any(alias.name == "shipvision._C" for alias in node.names):
+                        offenders.append(f"{path.relative_to(REPO)}:{node.lineno}")
+
+        assert not offenders, (
+            "shipvision._C must be imported through shipvision/_native.py, which refuses one "
+            "built in another checkout:\n  " + "\n  ".join(offenders)
+        )
+
+
 class TestLibraryIndependence:
     """This library must not import the server that consumes it. The dependency is one-way —
     ShipInfer calls in here — and reversing it would mean an algorithm could no longer be
