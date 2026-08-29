@@ -5,8 +5,10 @@ Each algorithm's compiled wrapper lives in its own package beside its readable t
 with two implementations, and keeping them apart is what let three of the five go for a
 release with no compiled version and nothing saying so.
 
-What stays here is the part that is *not* per algorithm: finding `shipvision._C`, refusing
-with a build command when it is absent, and converting between numpy and the binding. Five
+What stays here is the part that is *not* per algorithm: refusing with a build command when
+the extension is absent, and converting between numpy and the binding. *Finding* it belongs
+to `shipvision/_native.py`, which is the only importer and which refuses one built in another
+checkout. Five
 copies of a marshalling layer would be five places for a subtle disagreement about, say,
 whether an empty detection set is `(0, 4)` or `(0,)`.
 """
@@ -37,9 +39,9 @@ __all__ = [
 ]
 
 try:  # pragma: no cover - depends on whether the extension was built, not on a branch
-    from shipvision import _C
+    from shipvision._native import load_extension
 
-    _IMPORT_ERROR: str | None = None
+    _C, _IMPORT_ERROR = load_extension()
 except ImportError as exc:  # pragma: no cover
     _C = None  # type: ignore[assignment]
     _IMPORT_ERROR = str(exc)
