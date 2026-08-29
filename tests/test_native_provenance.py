@@ -33,14 +33,18 @@ def _install(monkeypatch: pytest.MonkeyPatch, module: types.ModuleType | None) -
         monkeypatch.setattr(shipvision, "_C", module, raising=False)
 
 
-@pytest.fixture()
+@pytest.fixture(autouse=True)
 def _clear(monkeypatch: pytest.MonkeyPatch):
+    """A cached answer from a previous test is a wrong answer for this one."""
     monkeypatch.delenv(_native.ALLOW_FOREIGN, raising=False)
+    _native.load_extension.cache_clear()
+    yield
+    _native.load_extension.cache_clear()
 
 
 class TestAForeignExtensionIsTreatedAsAbsent:
     def test_an_extension_from_another_checkout_is_refused_and_says_so(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, _clear
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         _install(monkeypatch, _extension(tmp_path / "_C.so"))
 
@@ -49,6 +53,19 @@ class TestAForeignExtensionIsTreatedAsAbsent:
 
         assert module is None
         assert "was built in a different checkout" in (reason or "")
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "FALSE"])
+    def test_turning_the_escape_hatch_off_by_value_does_not_keep_it(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str
+    ) -> None:
+        """`=0` reads as "off" to an operator. Presence alone would read it as "on" — and
+        hand back the foreign extension in silence, which is the state this module exists to
+        prevent, reached by the obvious action."""
+        _install(monkeypatch, _extension(tmp_path / "_C.so"))
+        monkeypatch.setenv(_native.ALLOW_FOREIGN, value)
+
+        with pytest.warns(RuntimeWarning, match="different checkout"):
+            assert _native.load_extension()[0] is None
 
     def test_the_operator_can_keep_it_deliberately(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -63,7 +80,7 @@ class TestAForeignExtensionIsTreatedAsAbsent:
 
 class TestALocalExtensionIsKept:
     def test_one_built_inside_this_package_is_used(
-        self, monkeypatch: pytest.MonkeyPatch, _clear
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         here = Path(shipvision.__file__).parent / "_C.cpython-000.so"
         local = _extension(here)
@@ -74,7 +91,7 @@ class TestALocalExtensionIsKept:
 
 class TestTheHeaderSaysWhichOneIsLive:
     def test_it_names_the_file_when_one_is_loaded(
-        self, monkeypatch: pytest.MonkeyPatch, _clear
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         here = Path(shipvision.__file__).parent / "_C.cpython-000.so"
         _install(monkeypatch, _extension(here))
@@ -82,7 +99,7 @@ class TestTheHeaderSaysWhichOneIsLive:
         assert _native.provenance().endswith("_C.cpython-000.so")
 
     def test_it_says_absent_with_the_reason_otherwise(
-        self, monkeypatch: pytest.MonkeyPatch, _clear
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _install(monkeypatch, None)
 

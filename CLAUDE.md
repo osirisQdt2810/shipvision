@@ -99,6 +99,7 @@ inner loops where a Python call per track is the frame budget. Nothing else.
 ```
 shipvision/            the Python package, at the repository root
 ├── registry.py        the one Registry primitive every family uses
+├── _native.py         the only importer of `shipvision._C`; refuses a foreign build
 ├── types.py           Detection / Detections / Track / GlobalTrack / Embedding / FrameTag
 ├── errors.py          ShipVisionError and its children
 ├── imgproc/           @IMGPROC   letterbox, crop, colour, normalise, NMS
