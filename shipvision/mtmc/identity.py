@@ -45,7 +45,7 @@ allowed to reuse its name.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Container, Iterable, Sequence
 
 import numpy as np
 
@@ -354,7 +354,11 @@ class GlobalIdAssigner:
         displaced: list[TrackKey] = []
 
         for key in non_overlap:
-            incumbent = self._member_from_camera(target, key.camera_id)
+            # AGAINST THE CURRENT HOLDER, not the one this cluster started with. A winner is
+            # placed immediately and the loser leaves in the deferred pass below, so a second
+            # challenger from the same camera used to contest a track that had already lost,
+            # win on the same evidence, and be adopted alongside the first.
+            incumbent = self._member_from_camera(target, key.camera_id, ignoring=displaced)
             owner = self._owner.get(key)
 
             if incumbent is None:
@@ -460,15 +464,21 @@ class GlobalIdAssigner:
                 best_id, best_age = global_id, age
         return best_id
 
-    def _member_from_camera(self, global_id: int, camera_id: str) -> TrackKey | None:
+    def _member_from_camera(
+        self, global_id: int, camera_id: str, ignoring: Container[TrackKey] = ()
+    ) -> TrackKey | None:
         """This identity's existing track on ``camera_id``, if it has one.
 
         One identity may hold at most one track per camera: it is one object, and a camera
         that sees one object twice at one instant has a single-camera tracking failure, not a
         cross-camera one. That constraint is what makes the contest below necessary.
+
+        ``ignoring`` is the tracks already displaced this cluster. They are still in
+        ``_members`` — losers leave in a deferred pass — and skipping them is what makes the
+        holder this returns the CURRENT one.
         """
         for member in self._members.get(global_id, ()):
-            if member.camera_id == camera_id:
+            if member.camera_id == camera_id and member not in ignoring:
                 return member
         return None
 

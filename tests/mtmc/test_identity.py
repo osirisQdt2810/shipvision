@@ -253,6 +253,72 @@ class TestContestedCamera:
         assert assignment[TrackKey("cam-a", 1)] is not None
         assigner.validate()
 
+    def _two_challengers(self, second_jitter: float, third_jitter: float):
+        """One identity on cam-a and cam-b, then TWO live cam-a tracks contesting the slot.
+
+        BOTH jitters have to be small. The incumbent is in the overlap, so its own feature is
+        in what the contest is scored against and its self-similarity of 1.0 lifts the bar: a
+        challenger at 0.3 loses to it outright, and a test built from two of those passes
+        whether or not the defect is present. Checked by removing the fix.
+        """
+        assigner = GlobalIdAssigner(validate_every_step=False)
+        anchor = view_of(0, view=0)
+        poor = view_of(0, view=2, jitter=0.9)
+        first = make_cluster(
+            {
+                "cam-a": [make_track(camera="cam-a", track_id=1, identity=0, embedding=poor)],
+                "cam-b": [make_track(camera="cam-b", track_id=1, identity=0, embedding=anchor)],
+            }
+        ).observations
+        target = next(iter(assigner.assign(first, [0, 0]).values()))
+
+        second = make_cluster(
+            {
+                "cam-a": [
+                    make_track(camera="cam-a", track_id=1, identity=0, embedding=poor),
+                    make_track(
+                        camera="cam-a",
+                        track_id=2,
+                        identity=0,
+                        embedding=view_of(0, view=1, jitter=second_jitter),
+                    ),
+                    make_track(
+                        camera="cam-a",
+                        track_id=3,
+                        identity=0,
+                        embedding=view_of(0, view=1, jitter=third_jitter),
+                    ),
+                ],
+                "cam-b": [make_track(camera="cam-b", track_id=1, identity=0, embedding=anchor)],
+            }
+        ).observations
+        assigner.assign(second, one_label_per(second, [[1, 2, 3], [0]]))
+        return assigner, target
+
+    def test_a_second_challenger_contests_the_winner_not_the_track_it_displaced(self) -> None:
+        """A winner is placed at once and the loser leaves in a deferred pass, so the
+        displaced incumbent was still the camera's member when the next challenger looked —
+        which let a second track beat an opponent that had already lost and be adopted
+        alongside the first. Both stayed; the deferred pass evicts only the one incumbent."""
+        assigner, target = self._two_challengers(second_jitter=0.02, third_jitter=0.10)
+
+        members = assigner.members(target)
+        from_cam_a = [key for key in members if key.camera_id == "cam-a"]
+        assert from_cam_a == [TrackKey("cam-a", 2)], "the better challenger, and only it"
+        assigner.validate()
+
+    def test_a_challenger_that_beats_the_new_holder_takes_the_slot_from_it(self) -> None:
+        """The other direction, and the one a naive fix breaks: skipping the displaced track
+        must not mean skipping the contest. Here the third track is better than the second, so
+        it displaces the WINNER — one per camera either way, but a different one."""
+        assigner, target = self._two_challengers(second_jitter=0.10, third_jitter=0.02)
+
+        members = assigner.members(target)
+        from_cam_a = [key for key in members if key.camera_id == "cam-a"]
+        assert from_cam_a == [TrackKey("cam-a", 3)], "the best of the three holds the slot"
+        assert assigner.owner_of(TrackKey("cam-a", 2)) != target, "and the loser moved out"
+        assigner.validate()
+
     def test_a_worse_looking_challenger_does_not_displace_the_incumbent(self) -> None:
         """The other half. Without it the rule above would pass on "always prefer the newer
         track", which is how an identity hops between two people standing together."""
