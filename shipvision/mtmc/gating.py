@@ -21,12 +21,14 @@ deployment: an instant held 11.8 cameras, so a camera appeared in 24% of instant
 consecutive appearances happened 1.4% of the time — the gate admitted **2.2%** of what it was
 offered and every global identity it produced held exactly one track. The same deployment at
 twelve cameras held 88% and admitted 74.7%. A streak therefore survives an instant its camera
-did not report in, and breaks when the camera *was* there and the track was not.
+did not report in, and breaks when the camera *was* there and the track was not -- including
+when it was there and saw nothing, which is why the roster comes from the caller rather than
+from the observations, where an empty view leaves no trace.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 
 from shipvision.errors import ConfigurationError
 from shipvision.mtmc.frames import TrackKey, TrackObservation
@@ -89,20 +91,37 @@ class ObservationGate:
         self._hits: dict[TrackKey, int] = {}
         self._absent: dict[TrackKey, int] = {}
 
-    def filter(self, observations: Sequence[TrackObservation]) -> list[TrackObservation]:
-        """The observations that may take part in association, in input order."""
+    def filter(
+        self,
+        observations: Sequence[TrackObservation],
+        *,
+        cameras: Collection[str] | None = None,
+    ) -> list[TrackObservation]:
+        """The observations that may take part in association, in input order.
+
+        Args:
+            observations: this instant's tracks, from every camera that was in it.
+            cameras: the cameras the instant HELD, empty views included. Without it the
+                roster is re-derived from the observations, and a camera that reported and
+                saw nothing then reads as absent -- its streaks are carried across an instant
+                that should have broken them, which is the flicker this gate exists to
+                reject. A caller holding a `FrameTrackCluster` passes `cluster.cameras`.
+        """
         tall_enough = [
             observation
             for observation in observations
             if observation.height_fraction > self.min_height_fraction
         ]
 
-        # THE CAMERAS THIS INSTANT ACTUALLY HELD, from the observations themselves rather
-        # than from a roster the gate does not have. A camera that is not here said nothing
-        # about its tracks, so its streaks are carried rather than broken -- the module
-        # docstring has the measurement that makes this the difference between a gate that
-        # admits 2.2% and one that works.
-        present = {observation.key.camera_id for observation in observations}
+        # THE CAMERAS THIS INSTANT HELD. A camera that is not here said nothing about its
+        # tracks, so its streaks are carried rather than broken -- the module docstring has
+        # the measurement that makes this the difference between a gate that admits 2.2% and
+        # one that works. Re-derived only when the caller cannot say; see the docstring.
+        present = (
+            set(cameras)
+            if cameras is not None
+            else {observation.key.camera_id for observation in observations}
+        )
 
         hits: dict[TrackKey, int] = {}
         absent: dict[TrackKey, int] = {}

@@ -161,7 +161,7 @@ class ClusterMTMCTracker(BaseMTMCTracker):
                 f"deduplication"
             )
         with self._lock:
-            admitted = self.gate.filter(cluster.observations)
+            admitted = self.gate.filter(cluster.observations, cameras=cluster.cameras)
             labels = self._cluster(admitted)
             assignment = self.assigner.assign(admitted, labels)
             label_of: dict[TrackKey, int] = {

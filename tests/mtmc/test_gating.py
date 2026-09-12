@@ -6,19 +6,31 @@ import pytest
 
 from shipvision.errors import ConfigurationError
 from shipvision.mtmc import ObservationGate, TrackKey
+from shipvision.mtmc.frames import FrameTrackCluster
 from tests.mtmc.conftest import make_cluster, make_track
 
 BIG_BOX = (100.0, 300.0, 200.0, 700.0)  # 400px of 1080 -> 0.370 of frame height
 SMALL_BOX = (100.0, 300.0, 120.0, 380.0)  # 80px of 1080 -> 0.074 of frame height
 
 
-def observations(*boxes: tuple[str, int, tuple[float, float, float, float]]) -> tuple:
+def instant(*boxes: tuple[str, int, tuple[float, float, float, float]]) -> FrameTrackCluster:
+    """The scene kept whole, because the roster lives on the cluster and not on the tracks.
+
+    A camera named with no boxes is an EMPTY VIEW: it reported this instant and saw nothing,
+    which the observations alone cannot express.
+    """
     by_camera: dict[str, list] = {}
     for camera, track_id, box in boxes:
-        by_camera.setdefault(camera, []).append(
-            make_track(camera=camera, track_id=track_id, identity=0, box=box)
-        )
-    return make_cluster(by_camera).observations
+        by_camera.setdefault(camera, [])
+        if track_id:
+            by_camera[camera].append(
+                make_track(camera=camera, track_id=track_id, identity=0, box=box)
+            )
+    return make_cluster(by_camera)
+
+
+def observations(*boxes: tuple[str, int, tuple[float, float, float, float]]) -> tuple:
+    return instant(*boxes).observations
 
 
 class TestHeightGate:
@@ -68,6 +80,35 @@ class TestAgeGate:
         assert gate.hits(TrackKey("cam-a", 1)) == 0
 
         assert gate.filter(scene) == []
+
+    def test_a_camera_that_reported_an_empty_view_breaks_the_streak(self) -> None:
+        """An empty view is a REPORT, not a silence. Derived from the observations it leaves
+        no trace, so a track that flickers on and off — exactly the track this gate rejects —
+        would keep its streak across every instant it was missing from and be admitted on the
+        third sighting, having never had two in a row. The roster is what tells them apart."""
+        gate = ObservationGate(min_hits=3)
+        seen = instant(("cam-a", 1, BIG_BOX))
+        empty = instant(("cam-a", 0, BIG_BOX))  # cam-a reported; its view held nothing
+        assert empty.cameras == ("cam-a",) and empty.observations == ()
+
+        gate.filter(seen.observations, cameras=seen.cameras)
+        gate.filter(empty.observations, cameras=empty.cameras)
+
+        assert (
+            gate.hits(TrackKey("cam-a", 1)) == 0
+        ), "the camera was there and the track was not"
+        assert gate.filter(seen.observations, cameras=seen.cameras) == []
+
+    def test_without_a_roster_an_empty_view_is_indistinguishable_from_an_absence(self) -> None:
+        """The documented cost of the fallback, pinned so it stays a decision. A caller that
+        cannot name the cameras gets the weaker rule, and the flicker above survives it."""
+        gate = ObservationGate(min_hits=3)
+        seen = instant(("cam-a", 1, BIG_BOX))
+
+        gate.filter(seen.observations)
+        gate.filter(instant(("cam-a", 0, BIG_BOX)).observations)
+
+        assert gate.hits(TrackKey("cam-a", 1)) == 1, "carried, because nothing said otherwise"
 
     def test_an_instant_its_camera_was_not_in_is_not_a_miss(self) -> None:
         """The other half, and the one that decides a fleet. A synchronised instant holds
