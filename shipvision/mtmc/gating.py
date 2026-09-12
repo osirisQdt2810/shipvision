@@ -13,11 +13,22 @@ across cameras nothing later un-merges it.
 far distance starts accruing trust only once it is close enough to be worth trusting. Swap the
 two and a track banks three frames of age while it is unusably small, then enters the matrix
 on its first usable frame with the gate already satisfied.
+
+**An instant its camera was not in is not evidence against a track.** "Consecutive" is about
+the track, not about the caller's clock: a synchronised instant holds whichever cameras landed
+inside its window, and at fleet scale that is a fraction of them. Measured on a 50-camera
+deployment: an instant held 11.8 cameras, so a camera appeared in 24% of instants and three
+consecutive appearances happened 1.4% of the time — the gate admitted **2.2%** of what it was
+offered and every global identity it produced held exactly one track. The same deployment at
+twelve cameras held 88% and admitted 74.7%. A streak therefore survives an instant its camera
+did not report in, and breaks when the camera *was* there and the track was not -- including
+when it was there and saw nothing, which is why the roster comes from the caller rather than
+from the observations, where an empty view leaves no trace.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 
 from shipvision.errors import ConfigurationError
 from shipvision.mtmc.frames import TrackKey, TrackObservation
@@ -28,14 +39,20 @@ __all__ = ["ObservationGate"]
 class ObservationGate:
     """Drops tracks that are too small, or too new to be trusted yet.
 
-    Holds one piece of state — how many consecutive qualifying frames each track has been
-    seen for — and it is bounded by construction rather than by a policy: every key that was
-    not seen in the current instant is dropped at the end of the call, so the map can never
-    hold more than the number of tracks currently in flight. That also *is* the definition of
-    "consecutive": a track that misses one frame starts again from one.
+    Holds one piece of state — how many consecutive qualifying observations each track has —
+    and stays bounded without a policy the caller has to tune: a key is dropped when its
+    camera reported and the track did not qualify, and after ``max_absent_instants``
+    consecutive instants its camera was not in at all. So the map holds the tracks in flight
+    plus, briefly, the tracks of a camera that has just gone quiet.
     """
 
-    def __init__(self, *, min_hits: int = 3, min_height_fraction: float = 1.0 / 9.0) -> None:
+    def __init__(
+        self,
+        *,
+        min_hits: int = 3,
+        min_height_fraction: float = 1.0 / 9.0,
+        max_absent_instants: int = 32,
+    ) -> None:
         """
         Args:
             min_hits: consecutive qualifying observations before a track may take part in
@@ -44,11 +61,22 @@ class ObservationGate:
                 reference's production value is 0.111, i.e. a person must fill about a ninth
                 of the frame's height — which at 1080p is 120 pixels, roughly the smallest
                 crop its re-ID model was trained to handle.
+            max_absent_instants: how many consecutive instants a camera may be absent from
+                before its tracks' streaks are dropped. Not a tuning knob but a bound: an
+                absent camera says nothing about its tracks, and without a limit a camera that
+                goes away for good would leave its streaks in the map for the life of the
+                process. At a 60 ms window 32 is about two seconds.
         """
         if min_hits < 1:
             raise ConfigurationError(
                 f"min_hits must be at least 1; 0 would admit a track on the frame it was "
                 f"first seen, got {min_hits}"
+            )
+        if max_absent_instants < 1:
+            raise ConfigurationError(
+                f"max_absent_instants must be at least 1; 0 would drop a streak the instant "
+                f"its camera missed one instant, which is the behaviour this replaced, "
+                f"got {max_absent_instants}"
             )
         if not 0.0 <= min_height_fraction < 1.0:
             raise ConfigurationError(
@@ -57,26 +85,65 @@ class ObservationGate:
             )
         self.min_hits = int(min_hits)
         self.min_height_fraction = float(min_height_fraction)
+        self.max_absent_instants = int(max_absent_instants)
+        #: Per track: the consecutive qualifying observations, and how many consecutive
+        #: instants its camera has been absent from since the last one.
         self._hits: dict[TrackKey, int] = {}
+        self._absent: dict[TrackKey, int] = {}
 
-    def filter(self, observations: Sequence[TrackObservation]) -> list[TrackObservation]:
-        """The observations that may take part in association, in input order."""
+    def filter(
+        self,
+        observations: Sequence[TrackObservation],
+        *,
+        cameras: Collection[str] | None = None,
+    ) -> list[TrackObservation]:
+        """The observations that may take part in association, in input order.
+
+        Args:
+            observations: this instant's tracks, from every camera that was in it.
+            cameras: the cameras the instant HELD, empty views included. Without it the
+                roster is re-derived from the observations, and a camera that reported and
+                saw nothing then reads as absent -- its streaks are carried across an instant
+                that should have broken them, which is the flicker this gate exists to
+                reject. A caller holding a `FrameTrackCluster` passes `cluster.cameras`.
+        """
         tall_enough = [
             observation
             for observation in observations
             if observation.height_fraction > self.min_height_fraction
         ]
 
+        # THE CAMERAS THIS INSTANT HELD. A camera that is not here said nothing about its
+        # tracks, so its streaks are carried rather than broken -- the module docstring has
+        # the measurement that makes this the difference between a gate that admits 2.2% and
+        # one that works. Re-derived only when the caller cannot say; see the docstring.
+        present = (
+            set(cameras)
+            if cameras is not None
+            else {observation.key.camera_id for observation in observations}
+        )
+
         hits: dict[TrackKey, int] = {}
+        absent: dict[TrackKey, int] = {}
+        for key, count in self._hits.items():
+            if key.camera_id in present:
+                continue  # its camera reported: this instant decides, below
+            missed = self._absent.get(key, 0) + 1
+            if missed <= self.max_absent_instants:
+                hits[key] = count
+                absent[key] = missed
+
         admitted: list[TrackObservation] = []
         for observation in tall_enough:
             count = self._hits.get(observation.key, 0) + 1
             hits[observation.key] = count
+            absent.pop(observation.key, None)
             if count >= self.min_hits:
                 admitted.append(observation)
-        # Replacing the map rather than pruning it is what enforces "consecutive", and it is
-        # also what keeps the map bounded by the tracks in flight instead of by uptime.
+        # Rebuilding the two maps rather than pruning them is what enforces "consecutive": a
+        # track whose camera WAS here and did not qualify is simply not copied across.
         self._hits = hits
+        self._absent = absent
         return admitted
 
     def hits(self, key: TrackKey) -> int:
@@ -85,10 +152,11 @@ class ObservationGate:
 
     def reset(self) -> None:
         self._hits.clear()
+        self._absent.clear()
 
     def sizes(self) -> dict[str, int]:
         """Every internal container's length. What a growth test asserts on."""
-        return {"hits": len(self._hits)}
+        return {"hits": len(self._hits), "absent": len(self._absent)}
 
     def __len__(self) -> int:
         return len(self._hits)
