@@ -12,13 +12,14 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 
 from shipvision.errors import BackendUnavailableError, ConfigurationError
 from shipvision.imgproc import IMGPROC, NumpyImageOps, build_image_ops
 from shipvision.imgproc.backends import native_ops, torch_ops
 from shipvision.registry import NATIVE, PYTHON, TORCH
-from tests.imgproc.conftest import NATIVE_BUILT, TORCH_INSTALLED
+from tests.imgproc.conftest import NATIVE_BUILT, TORCH_INSTALLED, TORCH_WITHOUT_TORCHVISION_OK
 
 
 class TestTheNumpyBackendIsAlwaysAvailable:
@@ -138,3 +139,70 @@ class TestTheNumpyBackendIsAlwaysAvailable:
 
         assert ops.device_index == 0
         assert set(ops.scratch_bytes()) >= {"staging_ring", "output", "nms"}
+
+
+class TestTorchvisionIsOneMethodsFastPathNotTheBackendsDependency:
+    """torch alone is enough to build this backend, and classic NMS still answers.
+
+    It used not to be: `torch` and `torchvision` shared an import `try`, so a machine with
+    torch but no torchvision lost `letterbox` and `crop_batch` as well — neither of which
+    has any torchvision in it. Downstreams that keep torchvision optional were dropped to
+    the numpy backend over one method.
+    """
+
+    @pytest.mark.skipif(not TORCH_WITHOUT_TORCHVISION_OK, reason="torch is not installed")
+    def test_the_backend_builds_and_letterboxes_with_torchvision_UNIMPORTABLE(self) -> None:
+        """In a fresh interpreter where `import torchvision` RAISES, which is the real defect.
+
+        Monkeypatching the module attribute to None cannot catch this: the two imports shared
+        a `try`, so the failure happened at IMPORT time and left `torch` as None too. Nothing
+        in this process can reproduce that, because torchvision is already imported here —
+        the same reason `test_importing_the_package_does_not_import_torch` uses a subprocess.
+        """
+        blocker = (
+            "import sys\n"
+            "class Blocked:\n"
+            "    def find_spec(self, name, path=None, target=None):\n"
+            "        if name == 'torchvision' or name.startswith('torchvision.'):\n"
+            "            raise ImportError('blocked for the test')\n"
+            "        return None\n"
+            "sys.meta_path.insert(0, Blocked())\n"
+            "import numpy as np\n"
+            "from shipvision.imgproc import build_image_ops\n"
+            "from shipvision.registry import TORCH\n"
+            "ops = build_image_ops(backend=TORCH)\n"
+            "canvas, geoms = ops.letterbox([np.full((40, 60, 3), 200, dtype=np.uint8)], (32, 32))\n"
+            "assert canvas.shape == (1, 3, 32, 32), canvas.shape\n"
+            "kept = ops.nms(np.array([[0, 0, 10, 10]], dtype=np.float32),\n"
+            "               np.array([0.9], dtype=np.float32), iou_threshold=0.5)\n"
+            "assert kept.tolist() == [0], kept\n"
+            "assert 'torchvision' not in sys.modules\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", blocker], capture_output=True, text=True, check=False
+        )
+
+        assert result.returncode == 0, result.stderr
+
+    @pytest.mark.skipif(not TORCH_INSTALLED, reason="torch and torchvision are not installed")
+    def test_classic_nms_agrees_with_and_without_torchvision(self, monkeypatch) -> None:
+        """The fallback is only worth having if it returns the same survivors.
+
+        Needs BOTH installed, because it compares the two paths against each other — the
+        skip above covers the machine that has only one of them.
+        """
+        rng = np.random.default_rng(20260915)
+        for _ in range(50):
+            count = int(rng.integers(1, 40))
+            xy = rng.uniform(0, 200, size=(count, 2))
+            wh = rng.uniform(5, 60, size=(count, 2))
+            boxes = np.hstack([xy, xy + wh]).astype(np.float32)
+            scores = rng.uniform(0, 1, size=count).astype(np.float32)
+
+            ops = build_image_ops(backend=TORCH)
+            with_tv = ops.nms(boxes, scores, iou_threshold=0.5)
+            monkeypatch.setattr(torch_ops, "torchvision", None)
+            without_tv = build_image_ops(backend=TORCH).nms(boxes, scores, iou_threshold=0.5)
+            monkeypatch.undo()
+
+            assert np.array_equal(with_tv, without_tv)
