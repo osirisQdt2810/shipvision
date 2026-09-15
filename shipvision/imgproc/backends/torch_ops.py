@@ -225,8 +225,14 @@ class TorchImageOps(ImageOps):
         mean: Sequence[float] | None,
         std: Sequence[float] | None,
         swap_rb: bool,
+        into: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """The crops, still on this backend's device. See :meth:`_letterbox_tensor`."""
+        """The crops, still on this backend's device. See :meth:`_letterbox_tensor`.
+
+        ``into`` is the caller's tensor when there is one, and only the final normalisation
+        writes there: `grid_sample` has no ``out=``, so the sampled batch is a temporary
+        whichever way this is called.
+        """
         frame = validate_image(image)
         box_array = validate_boxes(boxes)
         target_h, target_w = validate_target_hw(target_hw)
@@ -268,9 +274,16 @@ class TorchImageOps(ImageOps):
         # As in `_letterbox_tensor`: flip(1) is the BGR -> RGB swap, skipped when the caller
         # asked for BGR out, and mean/std are indexed by destination plane either way.
         ordered = crops.flip(1) if swap_rb else crops
-        return (ordered - self._as_channel_vector(mean_array)) / (
-            self._as_channel_vector(std_array)
-        )
+        mean_t = self._as_channel_vector(mean_array)
+        std_t = self._as_channel_vector(std_array)
+        if into is None:
+            return (ordered - mean_t) / std_t
+        # THE LAST STEP LANDS IN THE CALLER'S TENSOR. `grid_sample` has no `out=`, so the
+        # sampled batch is a temporary either way -- what this removes is the normalised copy
+        # of it and the copy after that, which is a whole batch each.
+        torch.sub(ordered, mean_t, out=into)
+        into.div_(std_t)
+        return into
 
     # -- pre-processing, straight to the device ---------------------------------------
 
@@ -342,11 +355,14 @@ class TorchImageOps(ImageOps):
         std: Sequence[float] | None = None,
         swap_rb: bool = True,
     ) -> None:
-        """See :meth:`ImageOps.crop_batch_into`."""
-        crops = self._crop_tensor(image, boxes, target_hw, mean=mean, std=std, swap_rb=swap_rb)
-        if crops.numel() == 0:
+        """See :meth:`ImageOps.crop_batch_into`. In place, as :meth:`letterbox_into` is."""
+        count = len(validate_boxes(boxes))
+        if count == 0:
             return
-        self._write_through_owner(crops, out, what="crop output")
+        destination = self._destination(out, count, target_hw, what="crop output")
+        self._crop_tensor(
+            image, boxes, target_hw, mean=mean, std=std, swap_rb=swap_rb, into=destination
+        )
 
     def _write_through_owner(
         self, values: torch.Tensor, out: DeviceBuffer, *, what: str

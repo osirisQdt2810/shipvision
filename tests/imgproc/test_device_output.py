@@ -380,6 +380,43 @@ class TestTorchDeviceOutput:
             f"({canvas_bytes} B), so this assembled one and copied it in"
         )
 
+    def test_crop_batch_into_does_not_allocate_a_second_batch_either(self) -> None:
+        """The same saving on the crop path, which `letterbox_into` got first.
+
+        `grid_sample` has no `out=`, so the sampled batch is a temporary whichever way this
+        is called and the threshold has to allow for it: what must NOT appear is a second
+        normalised batch plus the copy of it into the caller, which is what the old
+        `_write_through_owner` route cost.
+        """
+        import torch
+
+        if not torch.cuda.is_available():
+            pytest.skip("no CUDA device for torch")
+        ops = IMGPROC.build("default", backend=TORCH, device="cuda:0")
+        frame = np.full((64, 64, 3), 180, dtype=np.uint8)
+        boxes = np.array([[0, 0, 60, 60]] * 64, dtype=np.float32)
+        big = (256, 256)
+        batch_bytes = nchw_nbytes(len(boxes), big)
+        out = torch.empty(batch_bytes // 4, dtype=torch.float32, device="cuda:0")
+        buffer = DeviceBuffer.from_tensor(out)
+        ops.crop_batch_into(frame, boxes, big, buffer)
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        base = torch.cuda.memory_allocated()
+
+        ops.crop_batch_into(frame, boxes, big, buffer)
+        torch.cuda.synchronize()
+
+        peak = torch.cuda.max_memory_allocated() - base
+        # THE BUDGET, counted rather than guessed: the sampling grid (0.67x), `grid_sample`'s
+        # output, the `contiguous()` after the permute and the `flip` for the channel swap --
+        # 3.67 batches, measured at 184.6 MB here. A normalised fourth copy puts it at 4.67,
+        # so four is where the two implementations separate.
+        assert peak < 4 * batch_bytes, (
+            f"peak allocation {peak} B against a {batch_bytes} B batch (>4x): that is a "
+            f"normalised copy of the whole batch on top of the sampling temporaries"
+        )
+
     def test_a_raw_pointer_without_its_tensor_is_refused(self) -> None:
         import torch
 
