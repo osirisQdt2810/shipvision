@@ -345,6 +345,41 @@ class TestTorchDeviceOutput:
         assert geometry == expected_geometry
         assert np.array_equal(out.cpu().numpy().reshape(1, 3, *TARGET), expected)
 
+    def test_it_does_not_allocate_a_second_canvas_to_copy_in(self) -> None:
+        """The saving, measured where it exists: the allocator, not the output tensor.
+
+        Writing through and copying in produce identical pixels and both leave the tail of the
+        caller's buffer alone, so nothing about the RESULT can tell them apart -- my first
+        attempt at this test asserted on the data and passed against both. What differs is a
+        transient canvas the size of the whole batch, so peak allocation is the observable.
+        """
+        import torch
+
+        if not torch.cuda.is_available():
+            pytest.skip("no CUDA device for torch")
+        ops = IMGPROC.build("default", backend=TORCH, device="cuda:0")
+        # SMALL sources into a LARGE target, so the canvas dominates the per-frame
+        # temporaries: 50.3 MB of batch against ~9.4 MB of transients. At 480x640 sources the
+        # transients alone peak at 10 MB and the threshold cannot separate the two paths.
+        frames = [np.full((32, 32, 3), 200, dtype=np.uint8) for _ in range(16)]
+        big = (512, 512)
+        canvas_bytes = nchw_nbytes(len(frames), big)
+        out = torch.empty(canvas_bytes // 4, dtype=torch.float32, device="cuda:0")
+        buffer = DeviceBuffer.from_tensor(out)
+        ops.letterbox_into(frames, big, buffer)  # warm the caching allocator first
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        base = torch.cuda.memory_allocated()
+
+        ops.letterbox_into(frames, big, buffer)
+        torch.cuda.synchronize()
+
+        peak = torch.cuda.max_memory_allocated() - base
+        assert peak < canvas_bytes, (
+            f"peak allocation {peak} B reached the size of a whole extra canvas "
+            f"({canvas_bytes} B), so this assembled one and copied it in"
+        )
+
     def test_a_raw_pointer_without_its_tensor_is_refused(self) -> None:
         import torch
 

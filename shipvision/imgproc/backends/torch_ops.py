@@ -144,12 +144,18 @@ class TorchImageOps(ImageOps):
         mean: Sequence[float] | None,
         std: Sequence[float] | None,
         swap_rb: bool,
+        into: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, list[LetterboxGeometry]]:
         """The batch, still on this backend's device.
 
         Split out of :meth:`letterbox` so that :meth:`letterbox_into` is the same arithmetic
         with a different destination. Two copies of the canvas assembly would be two chances
         for the fast path to drift from the one the parity suite checks.
+
+        ``into`` is that different destination, and it is what makes ``letterbox_into`` write
+        in place: the bars and every resized frame land in the caller's tensor directly. Given
+        ``None`` this allocates, which is what :meth:`letterbox` wants because it copies to the
+        host next anyway.
         """
         frames = as_image_batch(images)
         target_h, target_w = validate_target_hw(target_hw)
@@ -159,9 +165,17 @@ class TorchImageOps(ImageOps):
         std_t = self._as_channel_vector(std_array)
 
         bars = (np.float32(pad_value) - mean_array) / std_array
-        canvas = torch.empty(
-            (len(frames), 3, target_h, target_w), dtype=torch.float32, device=self._device
+        shape = (len(frames), 3, target_h, target_w)
+        canvas = (
+            torch.empty(shape, dtype=torch.float32, device=self._device)
+            if into is None
+            else into
         )
+        if canvas.shape != shape:
+            raise ConfigurationError(
+                f"the destination is {tuple(canvas.shape)} but this batch letterboxes to "
+                f"{shape}"
+            )
         canvas[:] = self._as_channel_vector(bars)
 
         geometries: list[LetterboxGeometry] = []
@@ -279,16 +293,43 @@ class TorchImageOps(ImageOps):
     ) -> list[LetterboxGeometry]:
         """See :meth:`ImageOps.letterbox_into`.
 
-        Torch cannot build a tensor over a foreign device pointer from Python, so this writes
-        through :attr:`~shipvision.imgproc.base.DeviceBuffer.owner` — a device-to-device copy
-        inside torch, which still keeps the batch off the host. A descriptor built from a bare
-        pointer is refused rather than silently downgraded to a host round trip.
+        IN PLACE, which is the point of the method: the bars and every resized frame land in
+        the caller's tensor directly. It used to assemble a canvas of its own and copy that in,
+        so a caller who had already allocated the output paid a full device-to-device copy of
+        the batch on its hottest path -- ~39 MB for eight 640x640 images -- to reach a tensor
+        it owned all along. Torch still cannot build a tensor over a FOREIGN device pointer
+        from Python, so a descriptor built from a bare pointer is refused rather than silently
+        downgraded; what changed is that a descriptor built from a tensor is now written
+        through, not copied into.
         """
-        canvas, geometries = self._letterbox_tensor(
-            images, target_hw, pad_value=pad_value, mean=mean, std=std, swap_rb=swap_rb
+        destination = self._destination(
+            out, len(as_image_batch(images)), target_hw, what="letterbox output"
         )
-        self._write_through_owner(canvas, out, what="letterbox output")
+        _, geometries = self._letterbox_tensor(
+            images,
+            target_hw,
+            pad_value=pad_value,
+            mean=mean,
+            std=std,
+            swap_rb=swap_rb,
+            into=destination,
+        )
         return geometries
+
+    def _destination(
+        self, out: DeviceBuffer, count: int, target_hw: tuple[int, int], *, what: str
+    ) -> torch.Tensor:
+        """The caller's tensor, shaped as the batch this is about to write.
+
+        A view rather than an allocation, which is the whole saving; `from_tensor` has already
+        refused anything non-contiguous, so the reshape cannot silently restride.
+        """
+        target = self._owner_of(out, what=what)
+        target_h, target_w = validate_target_hw(target_hw)
+        out.require(nchw_nbytes(count, (target_h, target_w)), self._device_ordinal(), what=what)
+        return target.view(-1)[: count * 3 * target_h * target_w].view(
+            count, 3, target_h, target_w
+        )
 
     def crop_batch_into(
         self,
@@ -311,6 +352,18 @@ class TorchImageOps(ImageOps):
         self, values: torch.Tensor, out: DeviceBuffer, *, what: str
     ) -> None:
         """Copy ``values`` into the tensor the descriptor was built from, on the device."""
+        target = self._owner_of(out, what=what)
+        out.require(
+            nchw_nbytes(values.shape[0], values.shape[2:]), self._device_ordinal(), what=what
+        )
+        target.view(-1)[: values.numel()].copy_(values.reshape(-1))
+
+    def _owner_of(self, out: DeviceBuffer, *, what: str) -> torch.Tensor:
+        """The tensor a descriptor was built from, or the reason there is not one.
+
+        Shared by the copying path and the in-place one so a bare pointer is refused in the
+        same words whichever asked.
+        """
         if not self.supports_device_output:
             raise BackendUnavailableError(
                 f"these torch image ops are on {self.device!r}, so there is no device output "
@@ -323,10 +376,7 @@ class TorchImageOps(ImageOps):
                 "torch cannot wrap a foreign device pointer from Python. Build the buffer with "
                 "DeviceBuffer.from_tensor(tensor), or use the native backend for a bare pointer"
             )
-        out.require(
-            nchw_nbytes(values.shape[0], values.shape[2:]), self._device_ordinal(), what=what
-        )
-        target.view(-1)[: values.numel()].copy_(values.reshape(-1))
+        return target
 
     def _device_ordinal(self) -> int:
         """``torch.device("cuda")`` carries no index; it means the current device, which is 0
