@@ -16,7 +16,9 @@ translate this library's conventions — the geometry ones in
 * classic NMS is ``torchvision.ops.nms``, which agrees with the CUDA kernel on both the
   strict ``iou >`` test and the stable tie order. The soft and neighbourhood methods have no
   torch primitive and are a sequential loop over survivors either way, so they come from
-  :mod:`shipvision.imgproc.nms` — the same code the numpy backend runs.
+  :mod:`shipvision.imgproc.nms` — the same code the numpy backend runs, and where classic
+  also goes when torchvision is absent. torchvision is therefore OPTIONAL here: it is one
+  method's fast path, not the backend's dependency.
 
 This backend exists to prototype and to give a numeric second opinion without a build. It
 returns numpy, so it pays a device-to-host copy when ``device`` is a GPU; the path that
@@ -54,15 +56,24 @@ __all__ = ["TorchImageOps"]
 
 try:  # pragma: no cover - exercised by whether the machine has torch, not by a branch
     import torch
-    import torchvision
     from torch.nn import functional as torch_functional
 
     _IMPORT_ERROR: str | None = None
 except ImportError as exc:  # pragma: no cover
     torch = None  # type: ignore[assignment]
-    torchvision = None  # type: ignore[assignment]
     torch_functional = None  # type: ignore[assignment]
     _IMPORT_ERROR = str(exc)
+
+# SEPARATE, because torchvision is needed by ONE method and torch by all of them. Sharing a
+# `try` made a missing torchvision refuse `letterbox` and `crop_batch` too, which have no
+# torchvision in them -- so an install with torch alone lost the whole backend over `nms`.
+try:  # pragma: no cover - same: a property of the machine, not a branch
+    import torchvision
+
+    _TORCHVISION_ERROR: str | None = None
+except ImportError as exc:  # pragma: no cover
+    torchvision = None  # type: ignore[assignment]
+    _TORCHVISION_ERROR = str(exc)
 
 
 class TorchImageOps(ImageOps):
@@ -83,12 +94,13 @@ class TorchImageOps(ImageOps):
                 ``"cuda"`` would make the parity tests need a GPU.
 
         Raises:
-            BackendUnavailableError: torch or torchvision is not installed, or ``device``
-                names an accelerator this machine does not have.
+            BackendUnavailableError: torch is not installed, or ``device`` names an
+                accelerator this machine does not have. torchvision is NOT required —
+                without it, classic NMS takes the sequential path the other methods use.
         """
         if torch is None:
             raise BackendUnavailableError(
-                f"the torch image-ops backend needs torch and torchvision: {_IMPORT_ERROR}. "
+                f"the torch image-ops backend needs torch: {_IMPORT_ERROR}. "
                 f"Install shipvision[torch], or use backend='python'"
             )
         try:
@@ -337,8 +349,13 @@ class TorchImageOps(ImageOps):
         min_score_sum: float = 0.0,
         max_output: int | None = None,
     ) -> np.ndarray:
-        """See :meth:`ImageOps.nms`. ``"classic"`` goes to ``torchvision.ops.nms``."""
-        if method != CLASSIC:
+        """See :meth:`ImageOps.nms`. ``"classic"`` goes to ``torchvision.ops.nms``.
+
+        Without torchvision, classic falls back to :func:`~shipvision.imgproc.nms.suppress` --
+        the same sequential path the other methods already take here, and the one this
+        package's own docs pin against ``torchvision.ops.nms`` and the CUDA sweep.
+        """
+        if method != CLASSIC or torchvision is None:
             return suppress(
                 boxes,
                 scores,

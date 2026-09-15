@@ -28,6 +28,10 @@ TORCH_INSTALLED = (
     importlib.util.find_spec("torch") is not None
     and importlib.util.find_spec("torchvision") is not None
 )
+# TORCH ALONE, which is what the backend needs since torchvision became one method's fast
+# path. Kept separate from `TORCH_INSTALLED` rather than replacing it: widening that flag
+# would un-skip tests that have never run, which is a different change from this one.
+TORCH_WITHOUT_TORCHVISION_OK = importlib.util.find_spec("torch") is not None
 NATIVE_BUILT = native_available()
 
 
